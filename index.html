@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>EUROPA — Surface Spike</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color: #cfe3f5; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px; background: radial-gradient(ellipse at center, #06121f 0%, #000 75%);
+    z-index: 10; text-align: center; padding: 24px; transition: opacity .6s; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h1 { font-size: 28px; letter-spacing: 6px; margin: 0; color: #9fd8ff; font-weight: 300; }
+  #overlay p { max-width: 520px; line-height: 1.6; color: #8fa8c0; font-size: 15px; margin: 0; }
+  #enter-vr { font-size: 17px; padding: 14px 42px; border-radius: 999px; cursor: pointer;
+    background: #0e2a44; color: #cfe9ff; border: 1px solid #2f5b85; letter-spacing: 1px; }
+  #enter-vr:hover:not(:disabled) { background: #16405f; }
+  #enter-vr:disabled { opacity: .45; cursor: default; }
+  #hud { position: fixed; top: 12px; left: 12px; z-index: 5; font-size: 13px; color: #9fd8ff;
+    background: rgba(4, 12, 20, .55); border: 1px solid rgba(80, 140, 190, .35);
+    border-radius: 8px; padding: 8px 12px; line-height: 1.7; pointer-events: none; }
+  #hud .loc { color: #fff; }
+  #teleport-ui { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 5;
+    display: flex; gap: 10px; }
+  #teleport-ui button { font-size: 14px; padding: 10px 18px; border-radius: 999px; cursor: pointer;
+    background: rgba(10, 28, 46, .8); color: #cfe9ff; border: 1px solid #2f5b85; }
+  #teleport-ui button.active { background: #1b4a73; border-color: #6fb7ef; }
+  #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none;
+    transition: opacity .18s; z-index: 8; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 4;
+    background: radial-gradient(ellipse at center, transparent 58%, rgba(0,0,0,.55) 100%); }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+<div id="hud">EUROPA · SURFACE SPIKE<br><span class="fps">-- fps</span><br><span class="loc">Open Ice Plain</span></div>
+<div id="teleport-ui"></div>
+<div id="fade"></div>
+<div id="overlay">
+  <h1>EUROPA</h1>
+  <p>Surface section — engineering spike. Stand on the ice, teleport between three
+     survey points, and watch Jupiter hang motionless in a black sky.<br>
+     Desktop: drag to look, click the glowing rings (or the buttons below) to teleport.</p>
+  <button id="enter-vr" disabled>checking VR…</button>
+  <p style="font-size:12px">Serve over http://localhost (or any https) — WebXR needs a secure context.<br>
+     Jupiter: NASA/JPL-Caltech/SwRI/MSSS (JunoCam PIA21384, public domain).</p>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
