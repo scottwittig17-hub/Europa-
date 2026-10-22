@@ -1,0 +1,32 @@
+{
+  "_comment": "Optional art drop-ins. Regenerate with: python3 tools/scan_assets.py",
+  "pano": "pano/europa.jpg",
+  "tex": {
+    "walls": "tex/walls.jpg",
+    "snow": "tex/snow.png",
+    "tunnel": "tex/tunnel.jpg",
+    "veins": "tex/tunnel-veins.png",
+    "dash": "tex/cockpit-dash.jpg",
+    "rock": "tex/rock.jpg",
+    "creatures": "tex/creatures.jpg"
+  },
+  "chambers": [
+    "tex/chamber-vents.jpg"
+  ],
+  "loops": [
+    "loops/01-jelly-drifter.mp4",
+    "loops/02-light-ribbon.mp4",
+    "loops/03-amber-vent-plume.mp4",
+    "loops/04-jelly-portrait.mp4",
+    "loops/05-ice-ray.mp4"
+  ],
+  "ktx2": {
+    "pano/europa.jpg": "pano/europa.ktx2",
+    "tex/walls.jpg": "tex/walls.ktx2",
+    "tex/tunnel.jpg": "tex/tunnel.ktx2",
+    "tex/cockpit-dash.jpg": "tex/cockpit-dash.ktx2",
+    "tex/rock.jpg": "tex/rock.ktx2",
+    "tex/creatures.jpg": "tex/creatures.ktx2",
+    "tex/chamber-vents.jpg": "tex/chamber-vents.ktx2"
+  }
+}

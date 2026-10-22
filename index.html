@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Europa's Hidden Ocean — VR</title>
+<style>
+  :root { --abyss:#04131f; --ink:#d8f3f5; --soft:#8fb9c4; --cyan:#5fe6ec; --amber:#ffb877; }
+  html,body { margin:0; height:100%; background:var(--abyss); color:var(--ink); font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; overflow:hidden; }
+  #scene { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  #scene.dragging { cursor:grabbing; } #scene.pointing { cursor:pointer; }
+  #entry { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:24px;
+    background: radial-gradient(ellipse at 50% 35%, rgba(40,130,160,.35), rgba(4,19,31,.92) 65%), var(--abyss); }
+  #entry[hidden] { display:none; }
+  .card { max-width:520px; width:100%; background:rgba(6,30,46,.72); border:1px solid rgba(95,230,236,.22); border-radius:22px; padding:30px 32px;
+    box-shadow:0 0 60px rgba(95,230,236,.08); backdrop-filter:blur(6px); }
+  h1 { font:italic 600 34px/1.15 Georgia, "Times New Roman", serif; margin:0 0 6px; letter-spacing:.01em; }
+  .sub { color:var(--soft); margin:0 0 22px; }
+  h2 { font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--soft); margin:18px 0 8px; font-weight:600; }
+  button, .filebtn { font:inherit; color:var(--ink); background:rgba(95,230,236,.10); border:1px solid rgba(95,230,236,.35); border-radius:999px; padding:10px 18px; cursor:pointer; }
+  button:hover, .filebtn:hover { background:rgba(95,230,236,.18); }
+  button.primary { background:linear-gradient(180deg, rgba(95,230,236,.35), rgba(40,150,170,.35)); border-color:rgba(95,230,236,.7); font-weight:600; padding:12px 26px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input[type=file] { display:none; }
+  .filebtn.pulse { box-shadow:0 0 0 3px rgba(255,184,119,.8); animation:pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 7px rgba(255,184,119,.25); } }
+  ol { list-style:none; padding:0; margin:8px 0 0; max-height:130px; overflow:auto; color:var(--ink); }
+  li { padding:3px 0; border-bottom:1px solid rgba(143,185,196,.12); }
+  .tag { margin-left:8px; font-size:11px; color:var(--amber); letter-spacing:.08em; text-transform:uppercase; }
+  .note { color:var(--soft); font-size:13px; margin-top:10px; min-height:1em; }
+  .modes { flex-direction:column; align-items:stretch; gap:8px; }
+  .mode { display:block; padding:10px 14px; border:1px solid rgba(95,230,236,.22); border-radius:14px; cursor:pointer; }
+  .mode:has(input:checked) { border-color:rgba(95,230,236,.7); background:rgba(95,230,236,.08); }
+  .mode span { display:block; color:var(--soft); font-size:13px; margin-left:22px; }
+  .check { display:block; color:var(--soft); font-size:13px; margin-top:10px; cursor:pointer; }
+  .hint { color:var(--soft); font-size:13px; margin-top:18px; }
+  #debug { position:fixed; left:12px; top:12px; margin:0; padding:10px 12px; background:rgba(4,19,31,.78); border:1px solid rgba(95,230,236,.25); border-radius:10px; font:12px/1.45 ui-monospace, Menlo, monospace; color:var(--ink); white-space:pre; pointer-events:none; }
+  #loading { position:fixed; right:14px; bottom:12px; color:var(--soft); font-size:13px; }
+  #helpbar { position:fixed; left:50%; bottom:12px; transform:translateX(-50%); color:var(--soft); font-size:12px; background:rgba(4,19,31,.6); padding:6px 14px; border-radius:999px; display:none; }
+  body.in-scene #helpbar { display:block; }
+  .speeds { align-items:center; gap:.5rem; } .speedlbl { opacity:.8; margin-right:.3rem; }
+  label.speed { border:1px solid rgba(216,243,245,.25); border-radius:10px; padding:.35rem .7rem; cursor:pointer; } label.speed small { opacity:.65; margin-left:.3rem; }
+  label.speed:has(input:checked) { border-color:#5fe6ec; background:rgba(95,230,236,.12); }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<section id="entry">
+  <div class="card">
+    <h1>Europa's Hidden Ocean</h1>
+    <p class="sub">Glide beneath the ice. The caverns breathe with your music.</p>
+    <h2>Music</h2>
+    <div class="row">
+      <label class="filebtn" id="musicBtn" for="musicInput">Choose music files…</label>
+      <input id="musicInput" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.opus,.flac,.webm,.weba" multiple>
+      <button id="usePlaceholders" type="button">Use placeholder tracks</button>
+    </div>
+    <p class="note" id="queueNote">Select several files at once to make a queue; choosing again adds to it.</p>
+    <ol id="trackList"></ol>
+    <p class="note">Your files stay on this device; nothing is uploaded.</p>
+    <h2>Experience</h2>
+    <div class="row modes">
+      <label class="mode"><input type="radio" name="mode" value="ride" checked> <b>Submarine ride</b><span>Sit in a slow, hands-off sub gliding through the glowing caverns.</span></label>
+      <label class="mode"><input type="radio" name="mode" value="float"> <b>Float</b><span>Hang still in one cavern and look around.</span></label>
+    </div>
+    <div class="row speeds" id="speedRow"><span class="speedlbl">Ride speed</span>
+      <label class="speed"><input type="radio" name="speed" value="slow"> Slow <small>0.35 m/s</small></label>
+      <label class="speed"><input type="radio" name="speed" value="veryslow" checked> Very slow <small>0.25 m/s · default</small></label>
+      <label class="speed"><input type="radio" name="speed" value="drift"> Drift <small>0.15 m/s</small></label>
+    </div>
+    <p class="note">Slower is gentler on the stomach. You can also change it in VR on the dashboard (it always eases, never jumps).</p>
+    <label class="check"><input type="checkbox" id="vignette"> Comfort vignette (softly darkens the edges while moving)</label>
+    <h2>Dive in</h2>
+    <div class="row">
+      <button id="enterVR" class="primary" type="button" disabled>Enter VR</button>
+      <button id="preview" type="button">Preview on desktop</button>
+    </div>
+    <p id="vrNote" class="note"></p>
+    <p class="hint">Stay still and look around. Point at the music panel and press the trigger, or pinch. A / X plays or pauses. Push the thumbstick right for the next track.</p>
+  </div>
+</section>
+<pre id="debug" hidden></pre>
+<div id="loading" hidden>Loading…</div>
+<div id="helpbar">Drag to look · Space play/pause · N next · L lights · D debug · Esc menu</div>
+<script type="module" src="app/main.js"></script>
+</body>
+</html>
