@@ -1,0 +1,27 @@
+{
+ "size": [
+  3072,
+  1536
+ ],
+ "uv": {
+  "fish": [
+   0.0,
+   0.390625,
+   0.5,
+   0.609375
+  ],
+  "angler": [
+   0.0,
+   0.0,
+   0.5,
+   0.390625
+  ],
+  "veil": [
+   0.5,
+   0.0,
+   0.404296875,
+   1.0
+  ]
+ },
+ "note": "additive atlas: colour premultiplied by the matte (black = transparent)"
+}
