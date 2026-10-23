@@ -287,7 +287,12 @@ function flashFade() {
 function tryTeleportFromRay(origin, dir) {
   raycaster.set(origin, dir);
   const hit = raycaster.intersectObjects(discs, false)[0];
-  if (hit) loadLocation(hit.object.userData.locationId);
+  if (hit && hit.object.userData.locationId !== activeLocation) loadLocation(hit.object.userData.locationId);
+  else nextLocation(); // [KAI] far discs are 130m+ away and unaimable; trigger cycles spots
+}
+function nextLocation() {
+  const ids = [...locationGroups.keys()];
+  loadLocation(ids[(ids.indexOf(activeLocation) + 1) % ids.length]);
 }
 
 // XR controllers
@@ -299,6 +304,10 @@ for (let i = 0; i < 2; i++) {
     const origin = new THREE.Vector3().setFromMatrixPosition(ctl.matrixWorld);
     tryTeleportFromRay(origin, dir);
   });
+  // [KAI] visible pointer ray so you can see where you aim
+  const ray = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -4)]),
+    new THREE.LineBasicMaterial({ color: 0x54c8ff, transparent: true, opacity: 0.6 }));
+  ctl.add(ray);
   rig.add(ctl);
 }
 
