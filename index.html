@@ -55,6 +55,14 @@
   <p style="font-size:12px">Serve over http://localhost (or any https) — WebXR needs a secure context.<br>
      Jupiter: NASA/JPL-Caltech/SwRI/MSSS (JunoCam PIA21384, public domain).</p>
 </div>
+<script>
+setTimeout(function () {
+  var btn = document.getElementById('enter-vr');
+  if (btn && btn.disabled && btn.textContent.indexOf('checking') === 0) {
+    btn.textContent = 'Still checking… this page must be served via http://localhost (run: npx serve) — not opened by double-clicking the file';
+  }
+}, 6000);
+</script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
