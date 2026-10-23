@@ -62,23 +62,96 @@ scene.add(jupiterShine);
 const skyRig = new THREE.Group();
 scene.add(skyRig);
 
-// Stars — always visible, no atmosphere.
+// Stars — the real Hipparcos catalog (assets/stars.json), baked by tools/bake-stars.py:
+// 8,870 real stars, true positions, true B-V colors, brightness pre-scaled by Vmag.
+// Sorted brightest-first, so the first tier is the naked-eye standouts.
+// [KAI] Keep this path relative to the spike's index.html if surface/ moves.
 {
-  const N = 2600, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
-  const c = new THREE.Color();
-  for (let i = 0; i < N; i++) {
-    const v = new THREE.Vector3().randomDirection().multiplyScalar(1600);
-    if (v.y < -60) v.y = Math.abs(v.y); // keep a few below horizon out
-    pos.set([v.x, v.y, v.z], i * 3);
-    c.setHSL(0.55 + Math.random() * 0.12, Math.random() * 0.5, 0.55 + Math.random() * 0.45);
-    col.set([c.r, c.g, c.b], i * 3);
+  let starData = null;
+  try {
+    const res = await fetch('./assets/stars.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    starData = await res.json();
+  } catch (e) { console.warn('[europa] star catalog missing — band-only sky', e); }
+
+  if (starData && starData.stars && starData.stars.length) {
+    const STAR_R = 1560, tiers = [{ count: 420, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    let offset = 0;
+    for (const t of tiers) {
+      const n = Math.min(t.count, starData.stars.length - offset);
+      if (n <= 0) break;
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const s = starData.stars[offset + i];
+        let y = s[1]; if (y < -0.04) y = Math.abs(y); // keep a few below-horizon ones out of the dirt
+        pos.set([s[0] * STAR_R, y * STAR_R, s[2] * STAR_R], i * 3);
+        col.set([s[3], s[4], s[5]], i * 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      skyRig.add(new THREE.Points(g, new THREE.PointsMaterial({
+        size: t.size, sizeAttenuation: false, vertexColors: true,
+        transparent: true, opacity: 0.98, depthWrite: false
+      })));
+      offset += n;
+    }
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  skyRig.add(new THREE.Points(g, new THREE.PointsMaterial({
-    size: 1.6, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false
-  })));
+}
+
+// Milky Way — a luminous band locked to the REAL galactic plane.
+// The galactic north pole in the catalog's frame (+Y = north celestial pole) is
+// (-0.8677, 0.4560, 0.1981), so the band falls on the same great circle as the
+// density band in the star data — astronomically aligned, not eyeballed.
+{
+  const GAL_POLE = new THREE.Vector3(-0.8677, 0.4560, 0.1981).normalize();
+  const GAL_CENTER = new THREE.Vector3(-0.0547, -0.4849, 0.8728).normalize(); // Sgr A*, J2000
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER } },
+    side: THREE.BackSide, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying vec3 vDir;
+      uniform vec3 uPole;
+      uniform vec3 uCenter;
+      float hash(vec3 p) {
+        p = fract(p * 0.3183099 + 0.1);
+        p *= 17.0;
+        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+      }
+      float noise3(vec3 p) {
+        vec3 i = floor(p);
+        vec3 f = fract(p);
+        vec3 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(hash(i), hash(i + vec3(1.0, 0.0, 0.0)), u.x),
+                       mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), u.x), u.y),
+                   mix(mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), u.x),
+                       mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + vec3(1.0, 1.0, 1.0)), u.x), u.y), u.z);
+      }
+      void main() {
+        vec3 d = normalize(vDir);
+        float h = abs(dot(d, uPole));
+        float band = exp(-pow(h / 0.16, 2.0));          // ~+/-9 deg around the galactic plane
+        float glow = exp(-pow(h / 0.42, 2.0)) * 0.22;   // faint halo
+        float mottle = noise3(d * 7.0) * 0.55 + noise3(d * 17.0 + 3.7) * 0.45;
+        float lanes = smoothstep(0.52, 0.85, noise3(d * 11.0 + 9.1)); // dark dust lanes
+        float core = 0.45 + 0.55 * smoothstep(-0.6, 1.0, dot(d, uCenter)); // brighter toward Sagittarius
+        float horizon = smoothstep(-0.03, 0.05, d.y);   // fade below the ice
+        vec3 color = mix(vec3(0.62, 0.72, 1.0), vec3(1.0, 0.90, 0.78), core * 0.6)
+                   * (band * (0.30 + 0.70 * mottle) + glow);
+        color *= 1.0 - 0.55 * lanes * band;
+        gl_FragColor = vec4(color * horizon * 0.85, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`
+  });
+  skyRig.add(new THREE.Mesh(new THREE.SphereGeometry(1500, 48, 32), mat));
 }
 
 // Jupiter — tidally locked: it NEVER moves. Fixed to the sky rig, ~12 deg across.
