@@ -276,7 +276,8 @@ function addVista(group, def, opt) {
     uniforms: {
       uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
       uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
-      uTopFade: { value: opt.topFade ?? 0.0 }
+      uTopFade: { value: opt.topFade ?? 0.0 },
+      uKeyBand: { value: new THREE.Vector2(...(opt.keyBand || [0.45, 0.62])) }
     },
     side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
     vertexShader: `
@@ -285,7 +286,7 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade; uniform vec2 uKeyBand;
       void main() {
         vec4 t = texture2D(uMap, vUv);
         float a = smoothstep(0.0, 0.12, vUv.x) * smoothstep(1.0, 0.88, vUv.x)   // side edges
@@ -294,7 +295,7 @@ function addVista(group, def, opt) {
         if (uKey > 0.5) {                                                         // key the dark sky slot
           float l = dot(t.rgb /* linear */, vec3(0.299, 0.587, 0.114));
           float k = smoothstep(uKeyLo, uKeyHi, l);
-          a *= mix(1.0, k, smoothstep(0.45, 0.62, vUv.y));                        // only the top of the frame
+          a *= mix(1.0, k, smoothstep(uKeyBand.x, uKeyBand.y, vUv.y));                        // only the top of the frame
         }
         gl_FragColor = vec4(t.rgb * uBright, a);
         #include <colorspace_fragment>
@@ -390,6 +391,14 @@ registerLocation({
     const plat = new THREE.Mesh(new THREE.CylinderGeometry(9, 12, 2.4, 24), groundMat);
     plat.position.set(-95, 0.4, 105);
     group.add(plat);
+  }
+});
+
+registerLocation({
+  id: 'chaos', name: 'Chaos Terrain', pos: new THREE.Vector3(-20, 0, -160),
+  build(group) {
+    addVista(group, this, { url: './assets/chaos-terrain-vista.jpg', horizon: 0.15, arcDeg: 116, keySky: true, keyLo: 0.022, keyHi: 0.034, keyBand: [0.76, 0.84] });
+    pressureRidges(group, 7, 50, 2.0, this.pos, true);
   }
 });
 
