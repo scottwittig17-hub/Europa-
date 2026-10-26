@@ -1,3 +1,15 @@
+# Start here: tap a link to play
+
+Open these in the Quest browser, then tap Enter VR.
+
+- [Ocean ride, original (test #10b, the saved working version)](https://scottwittig17-hub.github.io/Europa-/)
+- [Ocean ride, test #11 (new ice walls, columns and manta)](https://scottwittig17-hub.github.io/Europa-/t11/)
+- [Surface of Europa (Canyon, Crevasse Rim, Ridge Overlook, with the star sky)](https://scottwittig17-hub.github.io/Europa-/surface/)
+
+The surface lives in the `surface` folder and test #11 in the `t11` folder. The ocean ride is the files at the top level.
+
+---
+
 # Europa's Hidden Ocean — VR (placeholder engine)
 
 An audio-reactive WebXR music visualizer for Meta Quest 3, set in a bioluminescent ocean under Europa's ice. The world breathes with your music.
