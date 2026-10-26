@@ -258,26 +258,95 @@ function registerLocation(def) {
   group.visible = false;
   scene.add(group);
   locationGroups.set(def.id, { def, group, loaded: false });
-  group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  group.traverse(o => { if (o.isMesh && !o.material.isShaderMaterial) { o.castShadow = true; o.receiveShadow = true; } });
 }
 
-function loadLocation(id) {
+/* --- art-directed vistas (art by Mars) ---
+ * Flat 16:9 stills shown on a curved cylinder segment facing -Z, centred on the
+ * player's eye so the image's horizon row sits at eye height. Unlit, not tone
+ * mapped, drawn after ground + sky (depthTest off) so it replaces them in its arc.
+ * Only one vista texture is resident at a time (loaded on teleport, disposed on leave). */
+const EYE = PLAYER_HEIGHT;
+const vistaLoader = new THREE.TextureLoader();
+function addVista(group, def, opt) {
+  const R = opt.radius || 300, arc = THREE.MathUtils.degToRad(opt.arcDeg || 104);
+  const H = R * arc * 9 / 16;
+  const geo = new THREE.CylinderGeometry(R, R, H, 72, 1, true, Math.PI - arc / 2, arc);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
+      uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
+      uTopFade: { value: opt.topFade ?? 0.0 }
+    },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = vec2(1.0 - uv.x, uv.y);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      varying vec2 vUv;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade;
+      void main() {
+        vec4 t = texture2D(uMap, vUv);
+        float a = smoothstep(0.0, 0.12, vUv.x) * smoothstep(1.0, 0.88, vUv.x)   // side edges
+                * smoothstep(0.0, 0.12, vUv.y);                                   // bottom edge
+        if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
+        if (uKey > 0.5) {                                                         // key the dark sky slot
+          float l = dot(t.rgb /* linear */, vec3(0.299, 0.587, 0.114));
+          float k = smoothstep(uKeyLo, uKeyHi, l);
+          a *= mix(1.0, k, smoothstep(0.45, 0.62, vUv.y));                        // only the top of the frame
+        }
+        gl_FragColor = vec4(t.rgb * uBright, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  // horizon row (fraction down from the top) at eye height
+  // cylinder centre is H/2 below its top; image top is horizon*H above the eye
+  mesh.position.set(def.pos.x, (def.playerY || 0) + EYE + opt.horizon * H - H / 2, def.pos.z);
+  mesh.renderOrder = 10; mesh.visible = false; mesh.frustumCulled = false;
+  mesh.userData.vista = { url: opt.url, tex: null };
+  group.add(mesh); group.userData.vista = mesh;
+}
+async function loadVista(entry) {
+  const m = entry.group.userData.vista; if (!m) return;
+  if (!m.userData.vista.tex) {
+    const t = await vistaLoader.loadAsync(m.userData.vista.url).catch(e => { console.warn('[europa] vista missing', e); return null; });
+    if (!t) return;
+    t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    m.userData.vista.tex = t;
+  }
+  m.material.uniforms.uMap.value = m.userData.vista.tex; m.visible = true;
+}
+function disposeVista(entry) {
+  const m = entry.group.userData.vista; if (!m || !m.userData.vista.tex) return;
+  m.visible = false; m.material.uniforms.uMap.value = null;
+  m.userData.vista.tex.dispose(); m.userData.vista.tex = null;
+}
+
+let loadToken = 0;
+async function loadLocation(id) {
   if (activeLocation === id) return;
+  const token = ++loadToken;
+  fadeEl.style.opacity = '1';
   const prev = activeLocation ? locationGroups.get(activeLocation) : null;
-  if (prev) { prev.group.visible = false; } // [KAI] production: dispose() here, rebuild on revisit
+  if (prev) { prev.group.visible = false; disposeVista(prev); }
   const next = locationGroups.get(id);
+  activeLocation = id;
+  await loadVista(next);
+  if (token !== loadToken) return;
   next.group.visible = true;
   next.loaded = true;
-  activeLocation = id;
   rig.position.set(next.def.pos.x, next.def.playerY || 0, next.def.pos.z);
   document.querySelector('#hud .loc').textContent = next.def.name;
   document.querySelectorAll('#teleport-ui button').forEach(b =>
     b.classList.toggle('active', b.dataset.loc === id));
-  flashFade();
+  setTimeout(() => { if (token === loadToken) fadeEl.style.opacity = '0'; }, 220);
 }
 
 /* --- location builders --- */
-function pressureRidges(group, count, spread, hMax) {
+function pressureRidges(group, count, spread, hMax, center = new THREE.Vector3(), behindOnly = false) {
   for (let i = 0; i < count; i++) {
     const w = 6 + Math.random() * 14, d = 2 + Math.random() * 4, h = 1 + Math.random() * hMax;
     const geo = new THREE.BoxGeometry(w, h, d, 8, 3, 3);
@@ -288,41 +357,28 @@ function pressureRidges(group, count, spread, hMax) {
     }
     geo.computeVertexNormals();
     const m = new THREE.Mesh(geo, groundMat);
-    const a = Math.random() * Math.PI * 2, r = 18 + Math.random() * spread;
-    m.position.set(Math.cos(a) * r, h * 0.15, Math.sin(a) * r);
+    // behindOnly: keep ridges out of the forward vista cone (z < 0 within ~65 deg of -Z)
+    const a = behindOnly ? (Math.PI * 0.5 - 2.0) + Math.random() * 4.0 : Math.random() * Math.PI * 2;
+    const r = 18 + Math.random() * spread;
+    m.position.set(center.x + Math.cos(a) * r, h * 0.15, center.z + Math.sin(a) * r);
     m.rotation.y = Math.random() * Math.PI;
     group.add(m);
   }
 }
 
 registerLocation({
-  id: 'open-ice', name: 'Open Ice Plain', pos: new THREE.Vector3(0, 0, 0),
-  build(group) { pressureRidges(group, 7, 60, 2.2); }
+  id: 'open-ice', name: 'Canyon', pos: new THREE.Vector3(0, 0, 0),
+  build(group) {
+    addVista(group, this, { url: './assets/canyon-vista.jpg', horizon: 0.47, arcDeg: 116, keySky: true, keyLo: 0.028, keyHi: 0.065 });
+    pressureRidges(group, 7, 60, 2.2, this.pos, true);
+  }
 });
 
 registerLocation({
-  id: 'crevasse', name: 'Crevasse', pos: new THREE.Vector3(130, 0, -50),
+  id: 'crevasse', name: 'Crevasse Rim \u2014 Open Lineae', pos: new THREE.Vector3(130, 0, -50),
   build(group) {
-    const wallMat = new THREE.MeshStandardMaterial({
-      map: ice.map, bumpMap: ice.bump, bumpScale: 1.2,
-      color: 0xaec6d8, roughness: 0.62
-    });
-    for (const side of [-1, 1]) {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(70, 9, 7, 12, 4, 2), wallMat);
-      const p = wall.geometry.attributes.position;
-      for (let v = 0; v < p.count; v++)
-        p.setX(v, p.getX(v) + (Math.random() - 0.5) * 3.5);
-      wall.geometry.computeVertexNormals();
-      wall.position.set(130, 3.2, -50 + side * 7.5);
-      group.add(wall);
-    }
-    // fallen slabs on the crevasse floor
-    for (let i = 0; i < 5; i++) {
-      const s = new THREE.Mesh(new THREE.BoxGeometry(2 + Math.random() * 3, 1 + Math.random() * 2, 2 + Math.random() * 3), groundMat);
-      s.position.set(118 + Math.random() * 24, 0.6, -50 + (Math.random() - 0.5) * 9);
-      s.rotation.set(Math.random(), Math.random() * 3, Math.random() * 0.6);
-      group.add(s);
-    }
+    addVista(group, this, { url: './assets/crevasse-rim-vista.jpg', horizon: 0.02, arcDeg: 116, topFade: 0.08 });
+    pressureRidges(group, 7, 50, 2.0, this.pos, true);
   }
 });
 
@@ -388,8 +444,9 @@ for (let i = 0; i < 2; i++) {
 {
   const rim = new THREE.Mesh(
     new THREE.TorusGeometry(0.62, 0.055, 12, 48, Math.PI * 1.15),
-    new THREE.MeshStandardMaterial({ color: 0x1a222c, roughness: 0.7, metalness: 0.3 })
+    new THREE.MeshStandardMaterial({ color: 0x1a222c, roughness: 0.7, metalness: 0.3, transparent: true, opacity: 1 })
   );
+  rim.renderOrder = 100; // drawn after the vista panel (which ignores depth)
   rim.position.set(0, -0.12, -0.32);
   rim.rotation.set(0.15, 0, Math.PI * 0.925); // arc centered at bottom of view
   camera.add(rim); // camera is already in the scene graph via rig — children render fine
@@ -462,7 +519,8 @@ function tickFps(now) {
 
 /* ---------------------------------------------------------- main loop */
 const clock = new THREE.Clock();
-loadLocation('open-ice');
+await loadLocation('open-ice'); // preloads the spawn vista before the first frame
+window.__surface = { loadLocation, look: (y, p = 0) => { yaw = y; pitch = p; }, get active() { return activeLocation; } };
 
 renderer.setAnimationLoop(() => {
   const now = performance.now();
