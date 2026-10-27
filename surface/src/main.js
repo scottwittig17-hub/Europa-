@@ -346,6 +346,23 @@ async function loadLocation(id) {
   setTimeout(() => { if (token === loadToken) fadeEl.style.opacity = '0'; }, 220);
 }
 
+/* soft unlit tint patch over the shared ground, per location (seam blend toward a vista's foreground) */
+function groundTint(group, c, color, R) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uCol: { value: new THREE.Color(color) } }, transparent: true, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec2 vP; uniform vec3 uCol;
+      void main(){ float r = length(vP) / ${R.toFixed(1)}; float a = 0.7 * (1.0 - smoothstep(0.5, 1.0, r));
+        gl_FragColor = vec4(uCol, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(new THREE.CircleGeometry(R, 48), mat);
+  m.rotation.x = -Math.PI / 2; m.position.set(c.x, 0.02, c.z); m.renderOrder = 5;
+  group.add(m);
+}
+
 /* --- location builders --- */
 function pressureRidges(group, count, spread, hMax, center = new THREE.Vector3(), behindOnly = false) {
   for (let i = 0; i < count; i++) {
@@ -398,6 +415,15 @@ registerLocation({
   id: 'chaos', name: 'Chaos Terrain', pos: new THREE.Vector3(-20, 0, -160),
   build(group) {
     addVista(group, this, { url: './assets/chaos-terrain-vista.jpg', horizon: 0.15, arcDeg: 116, keySky: true, keyLo: 0.022, keyHi: 0.034, keyBand: [0.76, 0.84] });
+    pressureRidges(group, 7, 50, 2.0, this.pos, true);
+  }
+});
+
+registerLocation({
+  id: 'fissure', name: 'Fissure Vantage', pos: new THREE.Vector3(160, 0, 110),
+  build(group) {
+    addVista(group, this, { url: './assets/fissure-vantage-vista.jpg', horizon: 0.125, arcDeg: 116, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] });
+    groundTint(group, this.pos, 0x7f8698, 160);   // blend procedural ice toward the still's foreground tone
     pressureRidges(group, 7, 50, 2.0, this.pos, true);
   }
 });
