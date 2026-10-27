@@ -286,7 +286,9 @@ function registerLocation(def) {
  *   arcDeg   how wide it wraps (90-116); neighbours should overlap ~30-40 deg
  *   horizon  horizon row as a fraction DOWN from the image top (must match across a spot's pictures)
  *   keySky   key out the dark painted sky so the real stars show; keyBand = [v0,v1] uv rows where keying starts
- *   sideFade soft left/right edge width (uv, default 0.16; use ~0.22 where pictures overlap)
+ *   sideFade soft left/right edge width (uv, default 0.16), or [left, right]: the panel ON TOP
+ *            in an overlap fades wide (~0.16-0.22), the one underneath stays nearly hard (~0.04)
+ *   bright/tint  exposure and [r,g,b] multiplier (linear) to match neighbours at the overlaps
  *   order    draw priority: higher draws on top in overlaps (front 12, sides 11, back 10)
  * All pictures of the active spot load behind the teleport fade and are disposed
  * on leave. Quest budget: one 4096x2304 front (~50 MB w/ mips) + side/back at
@@ -303,7 +305,9 @@ function addVista(group, def, opt) {
     uniforms: {
       uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
       uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
-      uTopFade: { value: opt.topFade ?? 0.0 }, uSide: { value: opt.sideFade ?? 0.16 },
+      uTopFade: { value: opt.topFade ?? 0.0 },
+      uSide: { value: new THREE.Vector2(...[].concat(opt.sideFade ?? 0.16, opt.sideFade ?? 0.16).slice(0, 2)) },
+      uTint: { value: new THREE.Vector3(...(opt.tint || [1, 1, 1])) },
       uKeyBand: { value: new THREE.Vector2(...(opt.keyBand || [0.45, 0.62])) }
     },
     side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
@@ -313,10 +317,10 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uSide; uniform vec2 uKeyBand;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade; uniform vec2 uKeyBand, uSide; uniform vec3 uTint;
       void main() {
         vec4 t = texture2D(uMap, vUv);
-        float a = smoothstep(0.0, uSide, vUv.x) * smoothstep(1.0, 1.0 - uSide, vUv.x)   // side edges
+        float a = smoothstep(0.0, uSide.x, vUv.x) * smoothstep(1.0, 1.0 - uSide.y, vUv.x) // side edges [left,right]
                 * smoothstep(0.0, 0.16, vUv.y);                                   // bottom edge (soft, over procedural ground)
         if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
         if (uKey > 0.5) {                                                         // key the dark sky slot
@@ -327,7 +331,7 @@ function addVista(group, def, opt) {
           float k = smoothstep(uKeyLo, uKeyHi, l) * smoothstep(uKeyLo * 0.6, uKeyHi * 0.8, lb);
           a *= mix(1.0, k, smoothstep(uKeyBand.x, uKeyBand.y, vUv.y));                        // only the top of the frame
         }
-        gl_FragColor = vec4(t.rgb * uBright, a);
+        gl_FragColor = vec4(t.rgb * uBright * uTint, a);
         #include <colorspace_fragment>
       }`
   });
@@ -346,12 +350,16 @@ async function loadPanel(m) {
     if (!t) return;
     t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true;
     t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    renderer.initTexture(t);   // upload (and mip) now, behind the fade, not on the first visible frame
     m.userData.vista.tex = t;
   }
   m.material.uniforms.uMap.value = m.userData.vista.tex; m.visible = true;
 }
 async function loadVista(entry) {   // all panels of the spot, in parallel, behind the fade
-  await Promise.all((entry.group.userData.vistas || []).map(loadPanel));
+  const ms = entry.group.userData.vistas || []; if (!ms.length) return;
+  const t0 = performance.now();
+  await Promise.all(ms.map(loadPanel));
+  console.info(`[europa] ${entry.def.id}: ${ms.length} vista panel(s) ready in ${Math.round(performance.now() - t0)} ms`);
 }
 function disposeVista(entry) {
   for (const m of entry.group.userData.vistas || []) {
@@ -427,14 +435,23 @@ registerLocation({
   }
 });
 
+/* Crevasse Rim surround (Mars): measured horizon rows + sky key per picture */
+const LEFT_H  = { h: 0.149, lo: 0.006, hi: 0.016, band: [0.83, 0.86] };   // crevasse-left: wall on the left edge, black strip ~15%
+const RIGHT_H = { h: 0.217, lo: 0.006, hi: 0.016, band: [0.76, 0.79] };   // crevasse-right: crevasse receding centre, black strip ~21%
+const SIDE_BRIGHT = 1.6, SIDE_TINT = [1.0, 1.0, 1.0];
+const BACK_BRIGHT = 1.75, BACK_TINT = [1.0, 1.12, 1.3];                   // back reads darker/warmer than the front
 registerLocation({
   id: 'crevasse', name: 'Crevasse Rim \u2014 Open Lineae', pos: new THREE.Vector3(130, 0, -50),
   build(group) {
-    addVista(group, this, { horizon: 0.02, arcDeg: 116, topFade: 0.08, vistas: [
-      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0,   order: 12 },
-      { url: './assets/vistas/crevasse-left.jpg',  yawDeg: -75, order: 11, sideFade: 0.22 },
-      { url: './assets/vistas/crevasse-right.jpg', yawDeg: 75,  order: 11, sideFade: 0.22 },
-      { url: './assets/vistas/crevasse-back.jpg',  yawDeg: 180, order: 10, sideFade: 0.22 }
+    // horizon rows measured per picture (brightness jump); every panel's horizon lands at eye height.
+    // front on top (wide fades), sides next (hard toward the front, soft toward the back), back underneath.
+    // back is 140 deg wide (uniformly scaled) so it overlaps each side by ~23 deg instead of 11.
+    const side = { arcDeg: 116, order: 11, keySky: true, bright: SIDE_BRIGHT, tint: SIDE_TINT };
+    addVista(group, this, { vistas: [
+      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.02, topFade: 0.08, sideFade: 0.22, order: 12 },
+      { ...side, url: './assets/vistas/crevasse-left.jpg',  yawDeg: -75, horizon: LEFT_H.h, keyLo: LEFT_H.lo, keyHi: LEFT_H.hi, keyBand: LEFT_H.band, sideFade: [0.16, 0.04] },
+      { ...side, url: './assets/vistas/crevasse-right.jpg', yawDeg: 75,  horizon: RIGHT_H.h, keyLo: RIGHT_H.lo, keyHi: RIGHT_H.hi, keyBand: RIGHT_H.band, sideFade: [0.04, 0.16] },
+      { url: './assets/vistas/crevasse-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.275, keySky: true, keyLo: 0.012, keyHi: 0.020, keyBand: [0.70, 0.73], sideFade: 0.04, bright: BACK_BRIGHT, tint: BACK_TINT }
     ] });
     groundTint(group, this.pos, 0x6c7a8a, 160, 0.7);
     // no procedural ridges here: the four panels cover 360 deg and ridges poked above the low horizon
