@@ -274,13 +274,28 @@ function registerLocation(def) {
 }
 
 /* --- art-directed vistas (art by Mars) ---
- * Flat 16:9 stills shown on a curved cylinder segment facing -Z, centred on the
- * player's eye so the image's horizon row sits at eye height. Unlit, not tone
- * mapped, drawn after ground + sky (depthTest off) so it replaces them in its arc.
- * Only one vista texture is resident at a time (loaded on teleport, disposed on leave). */
+ * Each painted spot shows one or more flat 16:9 stills on curved cylinder
+ * segments centred on the player's eye, so each image's horizon row sits at eye
+ * height. Unlit, not tone mapped, drawn after ground + sky (depthTest off).
+ *
+ * HOW TO ADD A PICTURE to a spot: drop the JPG in surface/assets/vistas/ named
+ * <spot>-<view>.jpg (e.g. crevasse-front.jpg, crevasse-left.jpg, crevasse-right.jpg,
+ * crevasse-back.jpg) and add an entry to that spot's `vistas: [...]` list:
+ *   { url, yawDeg, arcDeg, horizon, keySky/keyLo/keyHi/keyBand, topFade, sideFade, bright, order }
+ *   yawDeg   where the picture's centre faces: 0 = spawn forward, -75 = left, +75 = right, 180 = back
+ *   arcDeg   how wide it wraps (90-116); neighbours should overlap ~30-40 deg
+ *   horizon  horizon row as a fraction DOWN from the image top (must match across a spot's pictures)
+ *   keySky   key out the dark painted sky so the real stars show; keyBand = [v0,v1] uv rows where keying starts
+ *   sideFade soft left/right edge width (uv, default 0.16; use ~0.22 where pictures overlap)
+ *   order    draw priority: higher draws on top in overlaps (front 12, sides 11, back 10)
+ * All pictures of the active spot load behind the teleport fade and are disposed
+ * on leave. Quest budget: one 4096x2304 front (~50 MB w/ mips) + side/back at
+ * 2048x1152 (~12.5 MB) or 3072x1728 (~28 MB). A single-picture spot is just a
+ * one-element list. */
 const EYE = PLAYER_HEIGHT;
 const vistaLoader = new THREE.TextureLoader();
 function addVista(group, def, opt) {
+  if (opt.vistas) { for (const v of opt.vistas) addVista(group, def, { ...opt, vistas: null, ...v }); return; }
   const R = opt.radius || 300, arc = THREE.MathUtils.degToRad(opt.arcDeg || 104);
   const H = R * arc * 9 / 16;
   const geo = new THREE.CylinderGeometry(R, R, H, 72, 1, true, Math.PI - arc / 2, arc);
@@ -288,7 +303,7 @@ function addVista(group, def, opt) {
     uniforms: {
       uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
       uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
-      uTopFade: { value: opt.topFade ?? 0.0 },
+      uTopFade: { value: opt.topFade ?? 0.0 }, uSide: { value: opt.sideFade ?? 0.16 },
       uKeyBand: { value: new THREE.Vector2(...(opt.keyBand || [0.45, 0.62])) }
     },
     side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
@@ -298,10 +313,10 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade; uniform vec2 uKeyBand;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uSide; uniform vec2 uKeyBand;
       void main() {
         vec4 t = texture2D(uMap, vUv);
-        float a = smoothstep(0.0, 0.16, vUv.x) * smoothstep(1.0, 0.84, vUv.x)   // side edges
+        float a = smoothstep(0.0, uSide, vUv.x) * smoothstep(1.0, 1.0 - uSide, vUv.x)   // side edges
                 * smoothstep(0.0, 0.16, vUv.y);                                   // bottom edge (soft, over procedural ground)
         if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
         if (uKey > 0.5) {                                                         // key the dark sky slot
@@ -320,12 +335,12 @@ function addVista(group, def, opt) {
   // horizon row (fraction down from the top) at eye height
   // cylinder centre is H/2 below its top; image top is horizon*H above the eye
   mesh.position.set(def.pos.x, (def.playerY || 0) + EYE + opt.horizon * H - H / 2, def.pos.z);
-  mesh.renderOrder = 10; mesh.visible = false; mesh.frustumCulled = false;
+  mesh.rotation.y = -THREE.MathUtils.degToRad(opt.yawDeg || 0);  // + yaw = to the right
+  mesh.renderOrder = opt.order ?? 10; mesh.visible = false; mesh.frustumCulled = false;
   mesh.userData.vista = { url: opt.url, tex: null };
-  group.add(mesh); group.userData.vista = mesh;
+  group.add(mesh); (group.userData.vistas ||= []).push(mesh);
 }
-async function loadVista(entry) {
-  const m = entry.group.userData.vista; if (!m) return;
+async function loadPanel(m) {
   if (!m.userData.vista.tex) {
     const t = await vistaLoader.loadAsync(m.userData.vista.url).catch(e => { console.warn('[europa] vista missing', e); return null; });
     if (!t) return;
@@ -335,10 +350,14 @@ async function loadVista(entry) {
   }
   m.material.uniforms.uMap.value = m.userData.vista.tex; m.visible = true;
 }
+async function loadVista(entry) {   // all panels of the spot, in parallel, behind the fade
+  await Promise.all((entry.group.userData.vistas || []).map(loadPanel));
+}
 function disposeVista(entry) {
-  const m = entry.group.userData.vista; if (!m || !m.userData.vista.tex) return;
-  m.visible = false; m.material.uniforms.uMap.value = null;
-  m.userData.vista.tex.dispose(); m.userData.vista.tex = null;
+  for (const m of entry.group.userData.vistas || []) {
+    m.visible = false; m.material.uniforms.uMap.value = null;
+    if (m.userData.vista.tex) { m.userData.vista.tex.dispose(); m.userData.vista.tex = null; }
+  }
 }
 
 let loadToken = 0;
@@ -411,9 +430,15 @@ registerLocation({
 registerLocation({
   id: 'crevasse', name: 'Crevasse Rim \u2014 Open Lineae', pos: new THREE.Vector3(130, 0, -50),
   build(group) {
-    addVista(group, this, { url: './assets/crevasse-rim-vista.jpg', horizon: 0.02, arcDeg: 116, topFade: 0.08 });
+    addVista(group, this, { horizon: 0.02, arcDeg: 116, topFade: 0.08, vistas: [
+      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0,   order: 12 },
+      { url: './assets/vistas/crevasse-left.jpg',  yawDeg: -75, order: 11, sideFade: 0.22 },
+      { url: './assets/vistas/crevasse-right.jpg', yawDeg: 75,  order: 11, sideFade: 0.22 },
+      { url: './assets/vistas/crevasse-back.jpg',  yawDeg: 180, order: 10, sideFade: 0.22 }
+    ] });
     groundTint(group, this.pos, 0x6c7a8a, 160, 0.7);
-    pressureRidges(group, 7, 50, 2.0, this.pos, true);
+    // no procedural ridges here: the four panels cover 360 deg and ridges poked above the low horizon
+
   }
 });
 
