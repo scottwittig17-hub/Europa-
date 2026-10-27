@@ -289,8 +289,7 @@ function addVista(group, def, opt) {
       uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
       uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
       uTopFade: { value: opt.topFade ?? 0.0 },
-      uKeyBand: { value: new THREE.Vector2(...(opt.keyBand || [0.45, 0.62])) },
-      uHorizonV: { value: 1.0 - opt.horizon }, uHorizonFade: { value: opt.horizonFade ?? 0.008 }
+      uKeyBand: { value: new THREE.Vector2(...(opt.keyBand || [0.45, 0.62])) }
     },
     side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
     vertexShader: `
@@ -299,16 +298,16 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uHorizonV, uHorizonFade; uniform vec2 uKeyBand;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade; uniform vec2 uKeyBand;
       void main() {
         vec4 t = texture2D(uMap, vUv);
         float a = smoothstep(0.0, 0.16, vUv.x) * smoothstep(1.0, 0.84, vUv.x)   // side edges
-                * smoothstep(uHorizonV - 2.0 * uHorizonFade, uHorizonV - uHorizonFade, vUv.y);  // opaque just below the horizon, past the decal's far edge         // below horizon: the ground decal carries it
+                * smoothstep(0.0, 0.16, vUv.y);                                   // bottom edge (soft, over procedural ground)
         if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
         if (uKey > 0.5) {                                                         // key the dark sky slot
+          float l = dot(t.rgb /* linear */, vec3(0.299, 0.587, 0.114));
           // key on a slightly blurred (mip-biased) sample so isolated grain in the
           // painted sky doesn't survive as dark specks over the Milky Way
-          float l = dot(t.rgb /* linear */, vec3(0.299, 0.587, 0.114));
           float lb = dot(texture2D(uMap, vUv, 2.0).rgb, vec3(0.299, 0.587, 0.114));
           float k = smoothstep(uKeyLo, uKeyHi, l) * smoothstep(uKeyLo * 0.6, uKeyHi * 0.8, lb);
           a *= mix(1.0, k, smoothstep(uKeyBand.x, uKeyBand.y, vUv.y));                        // only the top of the frame
@@ -324,74 +323,6 @@ function addVista(group, def, opt) {
   mesh.renderOrder = 10; mesh.visible = false; mesh.frustumCulled = false;
   mesh.userData.vista = { url: opt.url, tex: null };
   group.add(mesh); group.userData.vista = mesh;
-  mesh.userData.decal = addVistaDecal(group, def, opt, mesh, R, arc, H);
-}
-
-/* Ground decal: the still's below-horizon part projected INTO the ground plane.
- * For each ground fragment, the ray from the spot's eye point is intersected with
- * the vista cylinder and the panel's UV is sampled there, so from the spawn eye the
- * decal is pixel-identical to the panel, but it lies on the real ground (correct
- * level + parallax when the head moves). Outside the painted arc the image is
- * mirrored (continuous, no hard line) all the way round 360 deg, and below the
- * still's bottom row it mirrors back up, so every visible ground pixel is painted.
- * One opaque unlit draw; replaces the shared procedural ground while the spot is
- * active (shared ground is hidden, so the sun-lit/painted brightness mismatch is gone). */
-function addVistaDecal(group, def, opt, panel, R, arc, H) {
-  const eyeY = (def.playerY || 0) + EYE;
-  const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
-      uEye: { value: new THREE.Vector3(def.pos.x, eyeY, def.pos.z) },
-      uCamH: { value: opt.camH ?? EYE },                      // virtual camera height of the still
-      uR: { value: R }, uArc: { value: arc }, uH: { value: H },
-      uBottom: { value: panel.position.y - H / 2 - eyeY },     // panel bottom, relative to the eye
-      uHorizonV: { value: 1.0 - opt.horizon }
-    },
-    toneMapped: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
-    vertexShader: `
-      varying vec3 vW;
-      void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz;
-        gl_Position = projectionMatrix * viewMatrix * w; }`,
-    fragmentShader: `
-      varying vec3 vW;
-      uniform sampler2D uMap; uniform vec3 uEye;
-      uniform float uBright, uCamH, uR, uArc, uH, uBottom, uHorizonV;
-      void main() {
-        vec2 d = vW.xz - uEye.xz;
-        float dist = max(length(d), 1e-3);
-        float phi = atan(d.x, -d.y);                    // 0 = straight ahead (-Z), + = right
-        float ha = 0.5 * uArc, s = 2.0 * (3.14159265 - ha);
-        float u = 0.5 + phi / uArc;
-        if (phi > ha) u = 1.0 - (phi - ha) / s;         // mirror out of the arc,
-        if (phi < -ha) u = (-phi - ha) / s;             // meeting continuously behind
-        float y = -uCamH * (uR / dist);                 // height on the panel along the eye ray
-        float v = (y - uBottom) / uH;
-        v = clamp(v, 0.002, uHorizonV - 0.0005);
-        vec4 t = texture2D(uMap, vec2(u, v));         // mirror lines are continuous: no mip seam
-        // Under the still's bottom row (near the feet) there is no painted data: fill
-        // with the bottom band of the still laid flat on the ground (mirrored repeat,
-        // tile ~ the footprint size), cross-faded in, so looking down never streaks.
-        float d0 = uCamH * uR / max(-uBottom, 1e-3);      // ground distance of the still's bottom row
-        vec2 q = d / (d0 * 0.9);
-        vec2 pp = 1.0 - abs(1.0 - mod(q + 1.0, 2.0));     // ping-pong 0..1
-        vec4 tp = texture2D(uMap, vec2(0.3 + 0.4 * pp.x, 0.01 + 0.16 * uHorizonV * pp.y));
-        t = mix(t, tp, smoothstep(d0 * 1.5, d0 * 0.95, dist));
-        gl_FragColor = vec4(t.rgb * uBright, 1.0);
-        #include <colorspace_fragment>
-      }`
-  });
-  // polar grid, rings dense near the feet: avoids huge fan triangles whose apex sits
-  // right under the eye (bad varying precision when the view is exactly level)
-  const geo = new THREE.RingGeometry(0, 1, 96, 40), gp = geo.attributes.position, Rd = opt.decalRadius || 760;
-  for (let i = 0; i < gp.count; i++) {
-    const x = gp.getX(i), y = gp.getY(i), r = Math.hypot(x, y), k = r > 0 ? Rd * Math.pow(r, 2.5) / r : 0;
-    gp.setXY(i, x * k, y * k);
-  }
-  const m = new THREE.Mesh(geo, mat);
-  m.rotation.x = -Math.PI / 2; m.position.set(def.pos.x, (def.playerY || 0) + 0.005, def.pos.z);
-  m.visible = false; m.frustumCulled = false; m.renderOrder = 0;
-  group.add(m);
-  return m;
 }
 async function loadVista(entry) {
   const m = entry.group.userData.vista; if (!m) return;
@@ -403,12 +334,10 @@ async function loadVista(entry) {
     m.userData.vista.tex = t;
   }
   m.material.uniforms.uMap.value = m.userData.vista.tex; m.visible = true;
-  const dc = m.userData.decal; dc.material.uniforms.uMap.value = m.userData.vista.tex; dc.visible = true;
 }
 function disposeVista(entry) {
   const m = entry.group.userData.vista; if (!m || !m.userData.vista.tex) return;
   m.visible = false; m.material.uniforms.uMap.value = null;
-  m.userData.decal.visible = false; m.userData.decal.material.uniforms.uMap.value = null;
   m.userData.vista.tex.dispose(); m.userData.vista.tex = null;
 }
 
@@ -423,8 +352,6 @@ async function loadLocation(id) {
   activeLocation = id;
   await loadVista(next);
   if (token !== loadToken) return;
-  const vm = next.group.userData.vista;
-  ground.visible = !(vm && vm.userData.decal.visible);  // painted spots: the decal IS the ground
   next.group.visible = true;
   next.loaded = true;
   rig.position.set(next.def.pos.x, next.def.playerY || 0, next.def.pos.z);
@@ -435,13 +362,13 @@ async function loadLocation(id) {
 }
 
 /* soft unlit tint patch over the shared ground, per location (seam blend toward a vista's foreground) */
-function groundTint(group, c, color, R) {
+function groundTint(group, c, color, R, alpha = 0.7) {
   const mat = new THREE.ShaderMaterial({
     uniforms: { uCol: { value: new THREE.Color(color) } }, transparent: true, depthWrite: false,
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `varying vec2 vP; uniform vec3 uCol;
-      void main(){ float r = length(vP) / ${R.toFixed(1)}; float a = 0.7 * (1.0 - smoothstep(0.5, 1.0, r));
+      void main(){ float r = length(vP) / ${R.toFixed(1)}; float a = ${alpha.toFixed(2)} * (1.0 - smoothstep(0.5, 1.0, r));
         gl_FragColor = vec4(uCol, a);
         #include <colorspace_fragment>
       }`
@@ -476,6 +403,8 @@ registerLocation({
   id: 'open-ice', name: 'Canyon', pos: new THREE.Vector3(0, 0, 0),
   build(group) {
     addVista(group, this, { url: './assets/canyon-vista.jpg', horizon: 0.47, arcDeg: 116, keySky: true, keyLo: 0.028, keyHi: 0.065 });
+    groundTint(group, this.pos, 0x737a84, 160, 0.7);
+    pressureRidges(group, 7, 60, 2.2, this.pos, true);
   }
 });
 
@@ -483,6 +412,8 @@ registerLocation({
   id: 'crevasse', name: 'Crevasse Rim \u2014 Open Lineae', pos: new THREE.Vector3(130, 0, -50),
   build(group) {
     addVista(group, this, { url: './assets/crevasse-rim-vista.jpg', horizon: 0.02, arcDeg: 116, topFade: 0.08 });
+    groundTint(group, this.pos, 0x6c7a8a, 160, 0.7);
+    pressureRidges(group, 7, 50, 2.0, this.pos, true);
   }
 });
 
@@ -501,6 +432,8 @@ registerLocation({
   id: 'chaos', name: 'Chaos Terrain', pos: new THREE.Vector3(-20, 0, -160),
   build(group) {
     addVista(group, this, { url: './assets/chaos-terrain-vista.jpg', horizon: 0.15, arcDeg: 116, keySky: true, keyLo: 0.022, keyHi: 0.034, keyBand: [0.76, 0.84] });
+    groundTint(group, this.pos, 0x767b86, 160, 0.7);
+    pressureRidges(group, 7, 50, 2.0, this.pos, true);
   }
 });
 
@@ -508,6 +441,8 @@ registerLocation({
   id: 'fissure', name: 'Fissure Vantage', pos: new THREE.Vector3(160, 0, 110),
   build(group) {
     addVista(group, this, { url: './assets/fissure-vantage-vista.jpg', horizon: 0.125, arcDeg: 116, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] });
+    groundTint(group, this.pos, 0x7f8698, 160);   // blend procedural ice toward the still's foreground tone
+    pressureRidges(group, 7, 50, 2.0, this.pos, true);
   }
 });
 
