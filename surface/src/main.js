@@ -74,8 +74,31 @@ scene.add(skyRig);
     starData = await res.json();
   } catch (e) { console.warn('[europa] star catalog missing — band-only sky', e); }
 
+  // Round star sprites — without a map, WebGL draws Points as hard squares
+  // (the "square stitching" seen in-headset). A radial-gradient canvas texture
+  // turns each point into a round, soft-edged star; vertexColors tints the
+  // white sprite, so the catalog's true B-V colors still show through.
+  // Two sprites: a crisp one for most stars, a wider glow one for the few
+  // brightest, so they read as glowing rather than just bigger dots.
+  function makeStarSprite(stops) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    for (const [o, a] of stops) grad.addColorStop(o, `rgba(255,255,255,${a})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  }
+  const starSpriteCrisp = makeStarSprite([[0, 1], [0.35, 0.8], [0.7, 0.25], [1, 0]]);
+  const starSpriteGlow = makeStarSprite([[0, 1], [0.2, 0.7], [0.5, 0.3], [1, 0]]);
+
   if (starData && starData.stars && starData.stars.length) {
-    const STAR_R = 1560, tiers = [{ count: 420, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    const STAR_R = 1560, tiers = [
+      { count: 60, size: 3.2, map: starSpriteGlow },
+      { count: 360, size: 2.4, map: starSpriteCrisp },
+      { count: Infinity, size: 1.5, map: starSpriteCrisp },
+    ];
     let offset = 0;
     for (const t of tiers) {
       const n = Math.min(t.count, starData.stars.length - offset);
@@ -92,7 +115,7 @@ scene.add(skyRig);
       g.setAttribute('color', new THREE.BufferAttribute(col, 3));
       skyRig.add(new THREE.Points(g, new THREE.PointsMaterial({
         size: t.size, sizeAttenuation: false, vertexColors: true,
-        transparent: true, opacity: 0.98, depthWrite: false
+        map: t.map, transparent: true, opacity: 0.98, depthWrite: false
       })));
       offset += n;
     }
