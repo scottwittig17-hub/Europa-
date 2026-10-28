@@ -494,3 +494,6 @@ The panorama/wall LOD in the float shader reads the real texture size, not a har
 - Loops 04 (jelly portrait, cropped off its vent) and 05 (ice ray) sit in front of the jelly-hall and ice-pillar backdrops. At most `MAX_LOOP_VIDEOS` (3) decode at once: nearest within 45 m in the ride, first three in float mode.
 - Regenerate the stills from the original attachments: `python3 tools/prepare_art.py <attachments dir>` (full source resolution now; see **High-res stills**); manifest: `python3 tools/scan_assets.py`. The HMD grade (brightness, contrast, vein glow, fog) is applied at runtime from `config.js`, not baked into the JPEGs, so re-running `prepare_art.py` keeps it.
 - Screenshots after the Oct 14 headset fixes: `screens/40-cockpit.png`, `41-chamber-jelly.png`, `42-chamber-vents.png`, `43-chamber-pillars.png`, `44-tunnel.png`, `45-entry-speed.png`, `46-dashboard-speed.png`. `30-34` show the earlier look, for comparison.
+
+### Milky Way image credit
+Milky Way panorama: ESO/S. Brunier, "The Milky Way panorama" (eso0932a), https://www.eso.org/public/images/eso0932a/ — licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Modified: downscaled to 2048x1024, point stars removed with a median filter, darkened/contrast-tuned in shader.

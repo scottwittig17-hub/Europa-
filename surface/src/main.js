@@ -122,7 +122,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   const GAL_CENTER = new THREE.Vector3(-0.0548, -0.4838, 0.8734).normalize(); // l=0,b=0, J2000
   const GAL_Y = new THREE.Vector3().crossVectors(GAL_POLE, GAL_CENTER).normalize(); // l=90
   // MW_STRENGTH — overall Milky Way brightness, the single knob to tune.
-  const MW_STRENGTH = 0.55;
+  const MW_STRENGTH = 1.6;
   const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-2k.jpg').catch(() => null);
   if (mwTex) {
     mwTex.colorSpace = THREE.SRGBColorSpace;
