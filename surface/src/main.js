@@ -429,7 +429,7 @@ function pressureRidges(group, count, spread, hMax, center = new THREE.Vector3()
 registerLocation({
   id: 'open-ice', name: 'Canyon', pos: new THREE.Vector3(0, 0, 0),
   build(group) {
-    addVista(group, this, { url: './assets/canyon-vista.jpg', horizon: 0.47, arcDeg: 116, keySky: true, keyLo: 0.028, keyHi: 0.065 });
+    addVista(group, this, { url: './assets/canyon-vista.jpg', horizon: 0.47, arcDeg: 116, keySky: true, keyLo: 0.028, keyHi: 0.065, keyBand: [0.705, 0.725] });  // key only above the far-end sky slot (row ~0.28); the dark back of the canyon floor (rows 0.30-0.55) was being keyed out
     groundTint(group, this.pos, 0x737a84, 160, 0.7);
     pressureRidges(group, 7, 60, 2.2, this.pos, true);
   }
