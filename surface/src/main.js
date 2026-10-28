@@ -436,7 +436,7 @@ registerLocation({
 });
 
 /* Crevasse Rim surround (Mars): measured horizon rows + sky key per picture */
-const LEFT_H  = { h: 0.149, lo: 0.006, hi: 0.016, band: [0.83, 0.86] };   // crevasse-left: wall on the left edge, black strip ~15%
+const LEFT_H  = { h: 0.212, lo: 0.006, hi: 0.016, band: [0.79, 0.81] };   // crevasse-left (alt): curved wall sweeping from the left foreground, black strip ~20%
 const RIGHT_H = { h: 0.217, lo: 0.006, hi: 0.016, band: [0.76, 0.79] };   // crevasse-right: crevasse receding centre, black strip ~21%
 const SIDE_BRIGHT = 1.6, SIDE_TINT = [1.0, 1.0, 1.0];
 const BACK_BRIGHT = 1.75, BACK_TINT = [1.0, 1.12, 1.3];                   // back reads darker/warmer than the front
