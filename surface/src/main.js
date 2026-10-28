@@ -109,73 +109,60 @@ scene.add(skyRig);
 const SKY_ORDER = { stars: 1, milkyWay: 2 };
 for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars;
 
-// Milky Way — a luminous band locked to the REAL galactic plane.
-// The galactic north pole in the catalog's frame (+Y = north celestial pole) is
-// (-0.8677, 0.4560, 0.1981), so the band falls on the same great circle as the
-// density band in the star data — astronomically aligned, not eyeballed.
+// Milky Way — a REAL all-sky photograph, locked to the REAL galactic plane.
+// Image: ESO/S. Brunier, "The Milky Way panorama" (eso0932a), CC BY 4.0,
+// https://www.eso.org/public/images/eso0932a/ — equirectangular in galactic
+// coordinates (l=0 at centre, l increasing to the left, b=+90 at top).
+// Preprocessed to 2048x1024 with a 5px median filter so its point stars are
+// removed: the Hipparcos catalog (stars.json) remains the only star source and
+// is untouched. The galactic frame below is expressed in the SAME convention
+// as tools/bake-stars.py (x = cos d cos a, y = sin d, z = -cos d sin a).
 {
-  const GAL_POLE = new THREE.Vector3(-0.8677, 0.4560, 0.1981).normalize();
-  const GAL_CENTER = new THREE.Vector3(-0.0547, -0.4849, 0.8728).normalize(); // Sgr A*, J2000
-  // MW_STRENGTH — overall Milky Way brightness, the single knob to tune
-  // (shipped value = the value Mars approved; raise slightly if it reads too faint toward Jupiter).
-  const MW_STRENGTH = 0.32;
-  const mat = new THREE.ShaderMaterial({
-    defines: { MW_STRENGTH: MW_STRENGTH.toFixed(3) },
-    uniforms: { uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER } },
-    side: THREE.BackSide, transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    vertexShader: `
-      varying vec3 vDir;
-      void main() {
-        vDir = normalize(position);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    fragmentShader: `
-      varying vec3 vDir;
-      uniform vec3 uPole;
-      uniform vec3 uCenter;
-      float hash(vec3 p) {
-        p = fract(p * 0.3183099 + 0.1);
-        p *= 17.0;
-        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-      }
-      float noise3(vec3 p) {
-        vec3 i = floor(p);
-        vec3 f = fract(p);
-        vec3 u = f * f * (3.0 - 2.0 * f);
-        return mix(mix(mix(hash(i), hash(i + vec3(1.0, 0.0, 0.0)), u.x),
-                       mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), u.x), u.y),
-                   mix(mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), u.x),
-                       mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + vec3(1.0, 1.0, 1.0)), u.x), u.y), u.z);
-      }
-      void main() {
-        vec3 d = normalize(vDir);
-        float h = abs(dot(d, uPole));
-        // Darker, deeper band (Mars-approved variant (i)): finer layered noise,
-        // power curve so only the dense star clouds glow, dust lanes + a dark rift,
-        // fainter halo, brightness capped.
-        float band = exp(-pow(h / 0.12, 2.0));          // ~+/-9 deg around the galactic plane
-        float glow = exp(-pow(h / 0.40, 2.0)) * 0.04;   // fainter halo
-        float n = noise3(d * 9.0) * 0.40 + noise3(d * 23.0 + 3.7) * 0.32
-                + noise3(d * 51.0 + 7.3) * 0.18 + noise3(d * 110.0 + 1.9) * 0.10;
-        float mottle = pow(n, 2.2) * 2.2;               // clumpy star clouds, deep gaps
-        float lanes = smoothstep(0.40, 0.75, noise3(d * 15.0 + 9.1) * 0.65 + noise3(d * 37.0 + 2.2) * 0.35);
-        float rift = exp(-pow(dot(d, uPole) / 0.035, 2.0)) * smoothstep(-0.2, 0.7, dot(d, uCenter))
-                   * (0.6 + 0.4 * noise3(d * 19.0));    // dark rift along the plane, toward the core
-        float core = 0.45 + 0.55 * smoothstep(-0.6, 1.0, dot(d, uCenter)); // brighter toward Sagittarius
-        float horizon = smoothstep(-0.03, 0.05, d.y);   // fade below the ice
-        vec3 color = mix(vec3(0.62, 0.72, 1.0), vec3(1.0, 0.90, 0.78), core * 0.6)
-                   * (band * mottle + glow);
-        color *= (1.0 - 0.85 * lanes * band) * (1.0 - 0.8 * rift);
-        color = min(color * MW_STRENGTH, vec3(0.22));   // brightness cap
-        gl_FragColor = vec4(color * horizon, 1.0);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`
-  });
-  const band = new THREE.Mesh(new THREE.SphereGeometry(1500, 48, 32), mat);
-  band.renderOrder = SKY_ORDER.milkyWay;
-  skyRig.add(band);
+  const GAL_POLE = new THREE.Vector3(-0.8677, 0.4560, 0.1981).normalize();   // NGP, J2000
+  const GAL_CENTER = new THREE.Vector3(-0.0548, -0.4838, 0.8734).normalize(); // l=0,b=0, J2000
+  const GAL_Y = new THREE.Vector3().crossVectors(GAL_POLE, GAL_CENTER).normalize(); // l=90
+  // MW_STRENGTH — overall Milky Way brightness, the single knob to tune.
+  const MW_STRENGTH = 0.55;
+  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-2k.jpg').catch(() => null);
+  if (mwTex) {
+    mwTex.colorSpace = THREE.SRGBColorSpace;
+    mwTex.generateMipmaps = false;               // 2048x1024 RGBA = 8 MiB GPU, no mip chain
+    mwTex.minFilter = THREE.LinearFilter;        // also avoids a mip seam at l=180
+    mwTex.wrapS = THREE.RepeatWrapping;
+    const mat = new THREE.ShaderMaterial({
+      defines: { MW_STRENGTH: MW_STRENGTH.toFixed(3) },
+      uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y } },
+      side: THREE.BackSide, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: `
+        varying vec3 vDir;
+        void main() {
+          vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        varying vec3 vDir;
+        uniform sampler2D uMap;
+        uniform vec3 uPole, uCenter, uGy;
+        void main() {
+          vec3 d = normalize(vDir);
+          float l = atan(dot(d, uGy), dot(d, uCenter));          // galactic longitude
+          float b = asin(clamp(dot(d, uPole), -1.0, 1.0));       // galactic latitude
+          vec2 uv = vec2(0.5 - l / 6.2831853, 0.5 + b / 3.1415927);
+          vec3 c = texture2D(uMap, uv).rgb;                       // linear (sRGB decoded)
+          c = max(c - 0.004, 0.0);                                // crush the sky-background floor
+          c = pow(c, vec3(1.25)) * 1.6;                           // deeper contrast: dust lanes go dark
+          float horizon = smoothstep(-0.03, 0.05, d.y);           // fade below the ice
+          vec3 color = min(c * MW_STRENGTH, vec3(0.22));          // brightness cap
+          gl_FragColor = vec4(color * horizon, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`
+    });
+    const band = new THREE.Mesh(new THREE.SphereGeometry(1500, 64, 32), mat);
+    band.renderOrder = SKY_ORDER.milkyWay;
+    skyRig.add(band);
+  }
 }
 
 // Jupiter — tidally locked: it NEVER moves. Fixed to the sky rig, ~12 deg across.
