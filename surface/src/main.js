@@ -116,7 +116,11 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
 {
   const GAL_POLE = new THREE.Vector3(-0.8677, 0.4560, 0.1981).normalize();
   const GAL_CENTER = new THREE.Vector3(-0.0547, -0.4849, 0.8728).normalize(); // Sgr A*, J2000
+  // MW_STRENGTH — overall Milky Way brightness, the single knob to tune
+  // (shipped value = the value Mars approved; raise slightly if it reads too faint toward Jupiter).
+  const MW_STRENGTH = 0.32;
   const mat = new THREE.ShaderMaterial({
+    defines: { MW_STRENGTH: MW_STRENGTH.toFixed(3) },
     uniforms: { uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER } },
     side: THREE.BackSide, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -147,16 +151,24 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
       void main() {
         vec3 d = normalize(vDir);
         float h = abs(dot(d, uPole));
-        float band = exp(-pow(h / 0.16, 2.0));          // ~+/-9 deg around the galactic plane
-        float glow = exp(-pow(h / 0.42, 2.0)) * 0.22;   // faint halo
-        float mottle = noise3(d * 7.0) * 0.55 + noise3(d * 17.0 + 3.7) * 0.45;
-        float lanes = smoothstep(0.52, 0.85, noise3(d * 11.0 + 9.1)); // dark dust lanes
+        // Darker, deeper band (Mars-approved variant (i)): finer layered noise,
+        // power curve so only the dense star clouds glow, dust lanes + a dark rift,
+        // fainter halo, brightness capped.
+        float band = exp(-pow(h / 0.12, 2.0));          // ~+/-9 deg around the galactic plane
+        float glow = exp(-pow(h / 0.40, 2.0)) * 0.04;   // fainter halo
+        float n = noise3(d * 9.0) * 0.40 + noise3(d * 23.0 + 3.7) * 0.32
+                + noise3(d * 51.0 + 7.3) * 0.18 + noise3(d * 110.0 + 1.9) * 0.10;
+        float mottle = pow(n, 2.2) * 2.2;               // clumpy star clouds, deep gaps
+        float lanes = smoothstep(0.40, 0.75, noise3(d * 15.0 + 9.1) * 0.65 + noise3(d * 37.0 + 2.2) * 0.35);
+        float rift = exp(-pow(dot(d, uPole) / 0.035, 2.0)) * smoothstep(-0.2, 0.7, dot(d, uCenter))
+                   * (0.6 + 0.4 * noise3(d * 19.0));    // dark rift along the plane, toward the core
         float core = 0.45 + 0.55 * smoothstep(-0.6, 1.0, dot(d, uCenter)); // brighter toward Sagittarius
         float horizon = smoothstep(-0.03, 0.05, d.y);   // fade below the ice
         vec3 color = mix(vec3(0.62, 0.72, 1.0), vec3(1.0, 0.90, 0.78), core * 0.6)
-                   * (band * (0.30 + 0.70 * mottle) + glow);
-        color *= 1.0 - 0.55 * lanes * band;
-        gl_FragColor = vec4(color * horizon * 0.85, 1.0);
+                   * (band * mottle + glow);
+        color *= (1.0 - 0.85 * lanes * band) * (1.0 - 0.8 * rift);
+        color = min(color * MW_STRENGTH, vec3(0.22));   // brightness cap
+        gl_FragColor = vec4(color * horizon, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`
