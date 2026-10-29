@@ -65,19 +65,32 @@ scene.add(jupiterShine);
 // its colour scaled so total light per star matches the old square (no brighter/dimmer sky).
 // Fixed pixel size (no distance attenuation — the sky is at infinity); on Quest the XR
 // framebuffer is ~1 device px per px, so 3-5 px sprites resolve as round, not as blocks.
-const STAR_ROUND_SCALE = 1.7;   // sprite diameter / old square size
-const STAR_MIN_PX = 3.0;        // smallest sprite that still reads as a disc
-const STAR_GLOW_TAIL = 0.35;    // brightest-tier halo strength (Mars's 'glow' sprite)
-function roundStarMaterial(size, glow = false) {
+// mw-polish (Quest feedback 'clusters oversized/blobby'): 1.7 -> 1.25, min 3.0 -> 2.2, glow 0.35 -> 0.18.
+// Total light per star is still conserved (gain below), so smaller = crisper, not dimmer.
+const STAR_ROUND_SCALE = 1.25;  // sprite diameter / old square size (was 1.7)
+const STAR_MIN_PX = 2.2;        // smallest sprite that still reads as a disc (was 3.0)
+const STAR_GLOW_TAIL = 0.18;    // brightest-tier halo strength (was 0.35)
+// Peripheral 'film' + shimmer fix: points have a FIXED pixel size, but toward the edge of a wide
+// (Quest ~104-110 deg) rectilinear eye buffer each pixel covers up to ~5x more sky (cos^3 of the
+// off-axis angle), so 40k dust sprites pile up into a grey haze there, which the headset's lens-
+// distortion pass then minifies and aliases into shimmer. Fade by cos(off-axis)^EDGE_POW:
+// dust gets full density compensation (3), catalog stars a gentle one so they never vanish.
+const DUST_EDGE_POW = 3.0;      // 0 = off
+const STAR_EDGE_POW = 1.0;      // 0 = off
+function roundStarMaterial(size, glow = false, edgePow = STAR_EDGE_POW) {
   const px = Math.max(size * STAR_ROUND_SCALE, STAR_MIN_PX);
   const PROFILE = 0.249;        // integral of the disc profile over the unit point quad
   const gain = (size / px) ** 2 / PROFILE;
   return new THREE.ShaderMaterial({
-    uniforms: { uSize: { value: px }, uGain: { value: gain }, uGlow: { value: glow ? STAR_GLOW_TAIL : 0 } },
+    uniforms: { uSize: { value: px }, uGain: { value: gain }, uGlow: { value: glow ? STAR_GLOW_TAIL : 0 }, uEdgePow: { value: edgePow } },
     vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     vertexShader: `
-      uniform float uSize; varying vec3 vCol;
-      void main() { vCol = color; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_PointSize = uSize; }`,
+      uniform float uSize, uEdgePow; varying vec3 vCol;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float c = max(-normalize(mv.xyz).z, 0.0);              // cos of angle off the view axis
+        vCol = color * pow(c, uEdgePow);
+        gl_Position = projectionMatrix * mv; gl_PointSize = uSize; }`,
     fragmentShader: `
       uniform float uGain, uGlow; varying vec3 vCol;
       void main() {
@@ -110,7 +123,7 @@ scene.add(skyRig);
 
   if (starData && starData.stars && starData.stars.length) {
     // tiers after Mars's star-sprites branch (60 glow / 360 crisp / rest); positions untouched
-    const STAR_R = 1560, tiers = [{ count: 60, size: 3.2, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    const STAR_R = 1560, tiers = [{ count: 60, size: 2.8, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
     let offset = 0;
     for (const t of tiers) {
       const n = Math.min(t.count, starData.stars.length - offset);
@@ -161,16 +174,29 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   const MW_FEATHER = 0.012;   // soft knee: band haze fades into black sky over this luminance range (no visible 'tint' edge)
   const MW_HFADE_DEG = 8;     // band dims to 0 over the lowest N degrees of elevation (reads as distant, not planted)
   const DUST_COUNT = 40000;   // procedural faint 'star dust' (NOT catalog stars; stars.json untouched). 0 = off
-  const DUST_GAIN = 1.0;      // star-dust brightness
+  const DUST_GAIN = 1.4;      // star-dust brightness (was 1.0; smaller crisper sprites read dimmer on-axis)
+  const DUST_SIZE = 0.8;      // star-dust point size before STAR_ROUND_SCALE/MIN (was 1.0 -> 3 px; now 2.2 px)
+  // M31 (Andromeda) — the lens-shaped oval off the band, upper-right of the forward view. It is the
+  // REAL galaxy (protected in tools/prep-milkyway.py), drawn ~2.5 deg long, brighter than to the eye.
+  // MW_M31_DIM < 1 dims just that patch of the photo (e.g. 0.5). 1.0 = off (as photographed).
+  const MW_M31_DIM = 1.0;
+  const M31_L = 117.7, M31_B = -24.0;  // where the eso0932a photo has M31 (~3.5 deg off nominal 121.2,-21.6)
   const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg').catch(() => null);
   if (mwTex) {
     mwTex.colorSpace = THREE.SRGBColorSpace;
-    mwTex.generateMipmaps = false;               // 4096x2048 RGBA = 32 MiB GPU, no mip chain
-    mwTex.minFilter = THREE.LinearFilter;        // also avoids a mip seam at l=180
+    // mipmaps ON (mw-polish): without a mip chain the 4K photo is minified 2-5x at the edges of the
+    // Quest view and its residual star grain sparkles as the head moves. +1/3 memory: 32 -> ~43 MiB.
+    // The l=180 atan wrap seam is avoided with textureGrad + wrap-safe derivatives in the shader.
+    mwTex.generateMipmaps = true;
+    mwTex.minFilter = THREE.LinearMipmapLinearFilter;
+    mwTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     mwTex.wrapS = THREE.RepeatWrapping;
     const mat = new THREE.ShaderMaterial({
       defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3), MW_FEATHER: MW_FEATHER.toFixed(4) },
-      uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y } },
+      uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y },
+        uM31: { value: new THREE.Vector3().copy(GAL_CENTER).multiplyScalar(Math.cos(M31_B * Math.PI / 180) * Math.cos(M31_L * Math.PI / 180))
+          .addScaledVector(GAL_Y, Math.cos(M31_B * Math.PI / 180) * Math.sin(M31_L * Math.PI / 180)).addScaledVector(GAL_POLE, Math.sin(M31_B * Math.PI / 180)) },
+        uM31Dim: { value: MW_M31_DIM } },
       side: THREE.BackSide, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending,
       vertexShader: `
@@ -182,13 +208,21 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
       fragmentShader: `
         varying vec3 vDir;
         uniform sampler2D uMap;
-        uniform vec3 uPole, uCenter, uGy;
+        uniform vec3 uPole, uCenter, uGy, uM31;
+        uniform float uM31Dim;
         void main() {
           vec3 d = normalize(vDir);
           float l = atan(dot(d, uGy), dot(d, uCenter));          // galactic longitude
           float b = asin(clamp(dot(d, uPole), -1.0, 1.0));       // galactic latitude
           vec2 uv = vec2(0.5 - l / 6.2831853, 0.5 + b / 3.1415927);
-          vec3 c = texture2D(uMap, uv).rgb;                       // linear (sRGB decoded)
+          // wrap-safe derivatives: u jumps 1->0 at l=180; take the smaller of du and d(fract(u+.5))
+          vec2 dx = dFdx(uv), dy = dFdy(uv);
+          vec2 uw = vec2(fract(uv.x + 0.5), uv.y);
+          vec2 dx2 = dFdx(uw), dy2 = dFdy(uw);
+          if (abs(dx2.x) < abs(dx.x)) dx.x = dx2.x;
+          if (abs(dy2.x) < abs(dy.x)) dy.x = dy2.x;
+          vec3 c = textureGrad(uMap, uv, dx, dy).rgb;             // linear (sRGB decoded), mipmapped
+          c *= mix(1.0, uM31Dim, smoothstep(cos(radians(3.0)), cos(radians(1.5)), dot(d, uM31)));
           float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
           float Yc = pow(max(Y - 0.004, 0.0), MW_CONTRAST) * 1.6;   // contrast on luminance only (keeps hue)
           Yc *= smoothstep(0.004, 0.004 + MW_FEATHER, Y);           // feathered edge of the haze
@@ -244,7 +278,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, n * 3), 3));
       g.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, n * 3), 3));
-      const dust = new THREE.Points(g, roundStarMaterial(1.0));   // round soft sprites too (no 1px squares)
+      const dust = new THREE.Points(g, roundStarMaterial(DUST_SIZE, false, DUST_EDGE_POW));   // round soft sprites too (no 1px squares)
       dust.renderOrder = SKY_ORDER.starDust; dust.frustumCulled = false;
       skyRig.add(dust);
     }
