@@ -58,6 +58,13 @@ for _a, (_cy, _cx) in zip(_area, _com):
     _big[y0:y1, x0:x1] = np.maximum(_big[y0:y1, x0:x1], np.clip((1.6 * _r - d) / (0.6 * _r), 0, 1))  # feathered disc
     _nbig += 1
 print('big stars inpainted', _nbig)
+# MANUAL inpaint: small leftover oval (~23x10px @6000, l=216.6 b=+66.3, not a catalogued object; planet-removal
+# remnant) -> same feathered disc + ~120px median fill. Far from all PROTECT entries (M31 untouched).
+for _l, _b, _r in [(216.64, 66.25, 16.0)]:
+    _cx = (0.5 - ((_l + 180) % 360 - 180) / 360) * _w; _cy = (0.5 - _b / 180) * _h
+    y0, y1, x0, x1 = int(_cy - 2 * _r), int(_cy + 2 * _r), int(_cx - 2 * _r), int(_cx + 2 * _r)
+    d = np.hypot(_yy[y0:y1, x0:x1] - _cy, _xx[y0:y1, x0:x1] - _cx)
+    _big[y0:y1, x0:x1] = np.maximum(_big[y0:y1, x0:x1], np.clip((1.6 * _r - d) / (0.6 * _r), 0, 1))
 src = src * (1 - _big[..., None]) + np.minimum(_fill, src) * _big[..., None]
 im = Image.fromarray((src * 255 + 0.5).astype(np.uint8))
 med = np.asarray(im.filter(ImageFilter.MedianFilter(7))).astype(np.float64) / 255.0
