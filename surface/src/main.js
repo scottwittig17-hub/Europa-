@@ -106,7 +106,7 @@ scene.add(skyRig);
 // drew AFTER the band, normal blending (opacity 0.98) overwrote the bright haze
 // with the faint stars' near-black colours: dark dots near Jupiter. Fixed: stars
 // first (renderOrder 1), band added on top (renderOrder 2), Jupiter opaque.
-const SKY_ORDER = { stars: 1, milkyWay: 2 };
+const SKY_ORDER = { stars: 1, starDust: 1.5, milkyWay: 2 };
 for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars;
 
 // Milky Way — a REAL all-sky photograph, locked to the REAL galactic plane.
@@ -126,6 +126,9 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   const MW_STRENGTH = 1.6;
   const MW_CAP = 0.24;        // max luminance of the band (hue-preserving cap)
   const MW_CONTRAST = 1.35;   // >1: brighter core, darker rift lanes, dark sky outside
+  const MW_HFADE_DEG = 8;     // band dims to 0 over the lowest N degrees of elevation (reads as distant, not planted)
+  const DUST_COUNT = 40000;   // procedural faint 'star dust' (NOT catalog stars; stars.json untouched). 0 = off
+  const DUST_GAIN = 1.0;      // star-dust brightness
   const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg').catch(() => null);
   if (mwTex) {
     mwTex.colorSpace = THREE.SRGBColorSpace;
@@ -133,7 +136,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
     mwTex.minFilter = THREE.LinearFilter;        // also avoids a mip seam at l=180
     mwTex.wrapS = THREE.RepeatWrapping;
     const mat = new THREE.ShaderMaterial({
-      defines: { MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3) },
+      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3) },
       uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y } },
       side: THREE.BackSide, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -158,7 +161,10 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
           vec3 color = c * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
           float Ym = dot(color, vec3(0.2126, 0.7152, 0.0722));
           color *= min(1.0, MW_CAP / max(Ym, 1e-5));             // hue-preserving brightness cap
-          float horizon = smoothstep(-0.03, 0.05, d.y);           // fade below the ice
+          // horizon: no atmosphere, but a band at full brightness right down to the ice reads as
+          // 'touching the ground'. Dim it gently over the lowest MW_HFADE_DEG of elevation.
+          float horizon = smoothstep(0.0, sin(radians(MW_HFADE_DEG)), d.y);
+          horizon *= horizon;
           // dither: breaks up 8-bit banding / residual texel grid
           float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
           color *= 1.0 + (n - 0.5) * 0.06;                        // multiplicative, so dark sky stays black
@@ -170,6 +176,47 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
     const band = new THREE.Mesh(new THREE.SphereGeometry(1500, 64, 32), mat);
     band.renderOrder = SKY_ORDER.milkyWay;
     skyRig.add(band);
+
+    // Star dust — DUST_COUNT faint tiny points, density + brightness following the photo's band
+    // (rejection-sampled against the texture's luminance). One extra draw call, ~1 MB. Grain the
+    // 4K photo can't give at Quest pixel density. Separate from the Hipparcos catalog.
+    if (DUST_COUNT > 0 && mwTex.image) {
+      const img = mwTex.image, cw = 1024, ch = 512;
+      const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+      const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, cw, ch);
+      const px = cx.getImageData(0, 0, cw, ch).data;
+      const lum = i => (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+      let rnd = 12345; const R = () => ((rnd = (rnd * 1664525 + 1013904223) >>> 0) / 4294967296);
+      const pos = new Float32Array(DUST_COUNT * 3), col = new Float32Array(DUST_COUNT * 3);
+      const DR = 1450, v = new THREE.Vector3();
+      let n = 0, guard = 0;
+      while (n < DUST_COUNT && guard++ < DUST_COUNT * 60) {
+        const u = R(), z = R() * 2 - 1;                       // uniform on sphere in galactic frame
+        const l = (0.5 - u) * Math.PI * 2, b = Math.asin(z);
+        const ix = Math.min(cw - 1, (u * cw) | 0), iy = Math.min(ch - 1, ((0.5 - b / Math.PI) * ch) | 0);
+        const k = (iy * cw + ix) * 4, Y = lum(k);
+        const p = Math.min(1, Math.pow(Y / 0.45, 1.6) + 0.015); // mostly in the band, a few everywhere
+        if (R() > p) continue;
+        v.copy(GAL_CENTER).multiplyScalar(Math.cos(b) * Math.cos(l))
+          .addScaledVector(GAL_Y, Math.cos(b) * Math.sin(l)).addScaledVector(GAL_POLE, Math.sin(b));
+        if (v.y < 0.0) continue;                                // never below the horizon
+        const hz = Math.min(1, v.y / Math.sin(MW_HFADE_DEG * Math.PI / 180));
+        const m = (0.10 + 0.35 * Math.pow(R(), 3) + 0.25 * Math.min(1, Y / 0.4)) * DUST_GAIN * hz * hz;
+        pos.set([v.x * DR, v.y * DR, v.z * DR], n * 3);
+        const w = 0.85 + 0.15 * R();
+        col.set([m * (px[k] / 255 * 0.5 + 0.5), m * (px[k + 1] / 255 * 0.5 + 0.5) * w, m * (px[k + 2] / 255 * 0.5 + 0.5) * w * w], n * 3);
+        n++;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, n * 3), 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, n * 3), 3));
+      const dust = new THREE.Points(g, new THREE.PointsMaterial({
+        size: 1.0, sizeAttenuation: false, vertexColors: true, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false
+      }));
+      dust.renderOrder = SKY_ORDER.starDust; dust.frustumCulled = false;
+      skyRig.add(dust);
+    }
   }
 }
 
@@ -626,6 +673,7 @@ let roll = 0;
 window.__surface = { loadLocation, look: (y, p = 0, r = 0) => { yaw = y; pitch = p; roll = r; },
   head: (x = 0, y = 0, z = 0) => camera.position.set(x, PLAYER_HEIGHT + y, z), get active() { return activeLocation; } };
 
+const _skyPos = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
   const now = performance.now();
   tickFps(now);
@@ -641,7 +689,8 @@ renderer.setAnimationLoop(() => {
   sun.target.updateMatrixWorld();
 
   // sky stays glued to the player (fixed stars, motionless Jupiter)
-  skyRig.position.set(rig.position.x, 0, rig.position.z);
+  // camera-centred (incl. head height/XR head offset) so the sky has zero parallax
+  camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
 
   // gentle disc pulse
   const s = 1 + Math.sin(now * 0.003) * 0.06;

@@ -1,6 +1,6 @@
 """Preprocess ESO/S. Brunier eso0932a (CC BY 4.0) into the surface Milky Way texture.
 Source: https://www.eso.org/public/archives/images/large/eso0932a.jpg (6000x3000, galactic equirect).
-Steps: remove point stars (median at full res) -> smooth mosaic/JPEG blocking -> colour grade to
+Steps: remove only BRIGHT point stars (masked median at full res, faint grain kept) -> unsharp detail -> smooth mosaic/JPEG blocking -> colour grade to
 starlight (desaturate magenta, warm-white core, tan dust) -> even out band brightness along longitude
 -> 4096x2048 JPEG q95 4:4:4.  Tunables below."""
 import sys, numpy as np
@@ -13,10 +13,19 @@ WARM = np.array([1.00, 0.90, 0.76])   # warm-white starlight tint for bright sta
 DUST = np.array([1.00, 0.80, 0.60])   # tan/brown tint for faint regions / dust lanes
 EQ_STRENGTH = 0.6                  # 0 = photo's own longitude falloff, 1 = fully flattened band
 EQ_MAXGAIN = 2.6
+STAR_K = 0.10                      # only stars brighter than median+STAR_K (sRGB) are removed (they duplicate catalog stars)
+DETAIL = 0.6                       # high-pass "clarity" boost of the remaining star grain / dust lanes
 im = Image.open(SRC).convert('RGB')
-im = im.filter(ImageFilter.MedianFilter(7))                 # stars out (at 6000 px)
-im = im.resize((W, H), Image.LANCZOS).filter(ImageFilter.GaussianBlur(1.2))  # seams/JPEG blocks
+src = np.asarray(im).astype(np.float64) / 255.0
+med = np.asarray(im.filter(ImageFilter.MedianFilter(7))).astype(np.float64) / 255.0
+# selective star removal: replace only bright point stars (and a 1px halo) by the median; faint grain stays
+mask = ((src - med).max(-1) > STAR_K).astype(np.uint8) * 255
+mask = np.asarray(Image.fromarray(mask).filter(ImageFilter.MaxFilter(3))) > 0
+a6 = np.where(mask[..., None], med, src)
+im = Image.fromarray((a6 * 255 + 0.5).astype(np.uint8)).resize((W, H), Image.LANCZOS)
 a = np.asarray(im).astype(np.float64) / 255.0
+lo = np.asarray(im.filter(ImageFilter.GaussianBlur(6))).astype(np.float64) / 255.0
+a = np.clip(a + DETAIL * (a - lo), 0, 1)                     # unsharp: grain + lane edges, no 1.2px blur
 lin = np.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
 Y = lin @ np.array([0.2126, 0.7152, 0.0722])
 # colour: neutral luminance tinted dust->warm by brightness, plus a little of the original hue
