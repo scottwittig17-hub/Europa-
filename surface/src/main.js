@@ -113,9 +113,10 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
 // Image: ESO/S. Brunier, "The Milky Way panorama" (eso0932a), CC BY 4.0,
 // https://www.eso.org/public/images/eso0932a/ — equirectangular in galactic
 // coordinates (l=0 at centre, l increasing to the left, b=+90 at top).
-// Preprocessed to 2048x1024 with a 5px median filter so its point stars are
-// removed: the Hipparcos catalog (stars.json) remains the only star source and
-// is untouched. The galactic frame below is expressed in the SAME convention
+// Preprocessed by tools/prep-milkyway.py to 4096x2048: 7px median at 6000px so
+// point stars are removed (the Hipparcos catalog, stars.json, stays the only star
+// source), mosaic/JPEG seams smoothed, magenta cast graded to warm starlight with
+// tan dust, and band brightness evened out along longitude. The galactic frame below is expressed in the SAME convention
 // as tools/bake-stars.py (x = cos d cos a, y = sin d, z = -cos d sin a).
 {
   const GAL_POLE = new THREE.Vector3(-0.8677, 0.4560, 0.1981).normalize();   // NGP, J2000
@@ -123,14 +124,16 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   const GAL_Y = new THREE.Vector3().crossVectors(GAL_POLE, GAL_CENTER).normalize(); // l=90
   // MW_STRENGTH — overall Milky Way brightness, the single knob to tune.
   const MW_STRENGTH = 1.6;
-  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-2k.jpg').catch(() => null);
+  const MW_CAP = 0.24;        // max luminance of the band (hue-preserving cap)
+  const MW_CONTRAST = 1.35;   // >1: brighter core, darker rift lanes, dark sky outside
+  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg').catch(() => null);
   if (mwTex) {
     mwTex.colorSpace = THREE.SRGBColorSpace;
-    mwTex.generateMipmaps = false;               // 2048x1024 RGBA = 8 MiB GPU, no mip chain
+    mwTex.generateMipmaps = false;               // 4096x2048 RGBA = 32 MiB GPU, no mip chain
     mwTex.minFilter = THREE.LinearFilter;        // also avoids a mip seam at l=180
     mwTex.wrapS = THREE.RepeatWrapping;
     const mat = new THREE.ShaderMaterial({
-      defines: { MW_STRENGTH: MW_STRENGTH.toFixed(3) },
+      defines: { MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3) },
       uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y } },
       side: THREE.BackSide, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -150,10 +153,15 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
           float b = asin(clamp(dot(d, uPole), -1.0, 1.0));       // galactic latitude
           vec2 uv = vec2(0.5 - l / 6.2831853, 0.5 + b / 3.1415927);
           vec3 c = texture2D(uMap, uv).rgb;                       // linear (sRGB decoded)
-          c = max(c - 0.004, 0.0);                                // crush the sky-background floor
-          c = pow(c, vec3(1.25)) * 1.6;                           // deeper contrast: dust lanes go dark
+          float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+          float Yc = pow(max(Y - 0.004, 0.0), MW_CONTRAST) * 1.6;   // contrast on luminance only (keeps hue)
+          vec3 color = c * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
+          float Ym = dot(color, vec3(0.2126, 0.7152, 0.0722));
+          color *= min(1.0, MW_CAP / max(Ym, 1e-5));             // hue-preserving brightness cap
           float horizon = smoothstep(-0.03, 0.05, d.y);           // fade below the ice
-          vec3 color = min(c * MW_STRENGTH, vec3(0.22));          // brightness cap
+          // dither: breaks up 8-bit banding / residual texel grid
+          float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+          color *= 1.0 + (n - 0.5) * 0.06;                        // multiplicative, so dark sky stays black
           gl_FragColor = vec4(color * horizon, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
