@@ -181,7 +181,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   // MW_M31_DIM < 1 dims just that patch of the photo (e.g. 0.5). 1.0 = off (as photographed).
   const MW_M31_DIM = 1.0;
   const M31_L = 117.7, M31_B = -24.0;  // where the eso0932a photo has M31 (~3.5 deg off nominal 121.2,-21.6)
-  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg').catch(() => null);
+  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg?v=5aefbd3').catch(() => null);
   if (mwTex) {
     mwTex.colorSpace = THREE.SRGBColorSpace;
     // mipmaps ON (mw-polish): without a mip chain the 4K photo is minified 2-5x at the edges of the
