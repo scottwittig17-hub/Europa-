@@ -58,6 +58,40 @@ const jupiterShine = new THREE.DirectionalLight(0xd8b48f, 0.18);
 jupiterShine.position.copy(jupiterDir).multiplyScalar(100);
 scene.add(jupiterShine);
 
+// Round star sprites — gl.POINTS without a sprite are hard pixel squares (the square stars seen
+// in-headset outside the Milky Way haze). Ported from Mars's mars/star-sprites idea (radial
+// sprite per point) as a tiny shader instead of a canvas texture: each point is drawn
+// STAR_ROUND_SCALE x wider (min STAR_MIN_PX) with a soft gaussian disc from gl_PointCoord, and
+// its colour scaled so total light per star matches the old square (no brighter/dimmer sky).
+// Fixed pixel size (no distance attenuation — the sky is at infinity); on Quest the XR
+// framebuffer is ~1 device px per px, so 3-5 px sprites resolve as round, not as blocks.
+const STAR_ROUND_SCALE = 1.7;   // sprite diameter / old square size
+const STAR_MIN_PX = 3.0;        // smallest sprite that still reads as a disc
+const STAR_GLOW_TAIL = 0.35;    // brightest-tier halo strength (Mars's 'glow' sprite)
+function roundStarMaterial(size, glow = false) {
+  const px = Math.max(size * STAR_ROUND_SCALE, STAR_MIN_PX);
+  const PROFILE = 0.249;        // integral of the disc profile over the unit point quad
+  const gain = (size / px) ** 2 / PROFILE;
+  return new THREE.ShaderMaterial({
+    uniforms: { uSize: { value: px }, uGain: { value: gain }, uGlow: { value: glow ? STAR_GLOW_TAIL : 0 } },
+    vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `
+      uniform float uSize; varying vec3 vCol;
+      void main() { vCol = color; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_PointSize = uSize; }`,
+    fragmentShader: `
+      uniform float uGain, uGlow; varying vec3 vCol;
+      void main() {
+        float r = length(gl_PointCoord - 0.5);                  // 0 centre .. 0.5 edge
+        float a = exp(-12.0 * r * r) + uGlow * exp(-4.0 * r * r) * (1.0 - 2.0 * r);
+        a *= 1.0 - smoothstep(0.42, 0.5, r);                    // round, no square corners
+        if (a < 0.002) discard;
+        gl_FragColor = vec4(vCol * a * uGain, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`
+  });
+}
+
 /* ---------------------------------------------------------- sky rig (follows player XZ) */
 const skyRig = new THREE.Group();
 scene.add(skyRig);
@@ -75,7 +109,8 @@ scene.add(skyRig);
   } catch (e) { console.warn('[europa] star catalog missing — band-only sky', e); }
 
   if (starData && starData.stars && starData.stars.length) {
-    const STAR_R = 1560, tiers = [{ count: 420, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    // tiers after Mars's star-sprites branch (60 glow / 360 crisp / rest); positions untouched
+    const STAR_R = 1560, tiers = [{ count: 60, size: 3.2, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
     let offset = 0;
     for (const t of tiers) {
       const n = Math.min(t.count, starData.stars.length - offset);
@@ -90,10 +125,7 @@ scene.add(skyRig);
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      skyRig.add(new THREE.Points(g, new THREE.PointsMaterial({
-        size: t.size, sizeAttenuation: false, vertexColors: true,
-        transparent: true, opacity: 0.98, depthWrite: false
-      })));
+      skyRig.add(new THREE.Points(g, roundStarMaterial(t.size, t.glow)));
       offset += n;
     }
   }
@@ -126,6 +158,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   const MW_STRENGTH = 1.6;
   const MW_CAP = 0.24;        // max luminance of the band (hue-preserving cap)
   const MW_CONTRAST = 1.35;   // >1: brighter core, darker rift lanes, dark sky outside
+  const MW_FEATHER = 0.012;   // soft knee: band haze fades into black sky over this luminance range (no visible 'tint' edge)
   const MW_HFADE_DEG = 8;     // band dims to 0 over the lowest N degrees of elevation (reads as distant, not planted)
   const DUST_COUNT = 40000;   // procedural faint 'star dust' (NOT catalog stars; stars.json untouched). 0 = off
   const DUST_GAIN = 1.0;      // star-dust brightness
@@ -136,7 +169,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
     mwTex.minFilter = THREE.LinearFilter;        // also avoids a mip seam at l=180
     mwTex.wrapS = THREE.RepeatWrapping;
     const mat = new THREE.ShaderMaterial({
-      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3) },
+      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3), MW_FEATHER: MW_FEATHER.toFixed(4) },
       uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y } },
       side: THREE.BackSide, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -158,6 +191,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
           vec3 c = texture2D(uMap, uv).rgb;                       // linear (sRGB decoded)
           float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
           float Yc = pow(max(Y - 0.004, 0.0), MW_CONTRAST) * 1.6;   // contrast on luminance only (keeps hue)
+          Yc *= smoothstep(0.004, 0.004 + MW_FEATHER, Y);           // feathered edge of the haze
           vec3 color = c * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
           float Ym = dot(color, vec3(0.2126, 0.7152, 0.0722));
           color *= min(1.0, MW_CAP / max(Ym, 1e-5));             // hue-preserving brightness cap
@@ -210,10 +244,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, n * 3), 3));
       g.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, n * 3), 3));
-      const dust = new THREE.Points(g, new THREE.PointsMaterial({
-        size: 1.0, sizeAttenuation: false, vertexColors: true, transparent: true,
-        blending: THREE.AdditiveBlending, depthWrite: false
-      }));
+      const dust = new THREE.Points(g, roundStarMaterial(1.0));   // round soft sprites too (no 1px squares)
       dust.renderOrder = SKY_ORDER.starDust; dust.frustumCulled = false;
       skyRig.add(dust);
     }

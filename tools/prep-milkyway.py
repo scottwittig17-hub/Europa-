@@ -15,8 +15,51 @@ EQ_STRENGTH = 0.6                  # 0 = photo's own longitude falloff, 1 = full
 EQ_MAXGAIN = 2.6
 STAR_K = 0.10                      # only stars brighter than median+STAR_K (sRGB) are removed (they duplicate catalog stars)
 DETAIL = 0.6                       # high-pass "clarity" boost of the remaining star grain / dust lanes
+# BIG-STAR inpaint: the 7px median can't erase stars/planets whose saturated core is wider than ~7px
+# (eso0932a's spiked bright stars + a planet at l=69 b=-58); they survived as smeared fixed 'blobs'.
+# Compact saturated cores (>= BIG_MIN_PX) are masked with a radius-scaled halo and replaced by a
+# feathered large-scale (~36px) median background. Real compact nebulae/galaxies are protected.
+BIG_L = 0.80                       # core luminance (sRGB 0-1) ...
+BIG_DL = 0.35                      # ... and contrast above the ~36px median background
+BIG_MIN_PX = 8                     # min saturated-core area (px @6000) to treat as a big star
+BIG_HALO_K = 3.0                   # mask radius = BIG_HALO_K * core radius + BIG_HALO_PX
+BIG_HALO_PX = 8
+PROTECT = [(-151.0, -19.4, 3.0),   # Orion nebula M42/M43 (l=209)  (l, b, radius deg; l in -180..180)
+           (121.2, -21.6, 5.0),    # M31 (photo's M31 core sits ~3.5 deg off nominal)
+           (166.6, -23.5, 2.0),    # Pleiades
+           (309.0 - 360, 15.0, 1.5),  # omega Cen
+           (305.9 - 360, -44.9, 1.5), # 47 Tuc
+           (-79.5, -32.9, 5.0),    # LMC
+           (-57.2, -44.3, 3.0),    # SMC
+           (-72.4, -0.6, 3.0)]     # Carina nebula / eta Car
+PROTECT_B = 4.0                    # also never touch |b| < PROTECT_B (galactic-plane knots, clusters, nebulae)
 im = Image.open(SRC).convert('RGB')
 src = np.asarray(im).astype(np.float64) / 255.0
+from scipy import ndimage as nd
+_h, _w = src.shape[:2]
+_L = src @ np.array([0.299, 0.587, 0.114])
+_bgim = im.resize((_w // 4, _h // 4), Image.BOX).filter(ImageFilter.MedianFilter(9)).resize((_w, _h), Image.BILINEAR)
+_bg = np.asarray(_bgim).astype(np.float64) / 255.0           # ~36px median: detection
+_fill = np.asarray(im.resize((_w // 8, _h // 8), Image.BOX).filter(ImageFilter.MedianFilter(15))
+                   .resize((_w, _h), Image.BICUBIC)).astype(np.float64) / 255.0   # ~120px median: fill (no halo leak)
+_core = (_L > BIG_L) & (_L - _bg @ np.array([0.299, 0.587, 0.114]) > BIG_DL)
+_lab, _n = nd.label(_core)
+_area = nd.sum(_core, _lab, range(1, _n + 1)); _com = nd.center_of_mass(_core, _lab, range(1, _n + 1))
+_yy, _xx = np.mgrid[0:_h, 0:_w]
+_big = np.zeros((_h, _w), np.float64); _nbig = 0
+for _a, (_cy, _cx) in zip(_area, _com):
+    if _a < BIG_MIN_PX: continue
+    _l = (0.5 - _cx / _w) * 360; _b = (0.5 - _cy / _h) * 180
+    if abs(_b) < PROTECT_B: continue
+    if any(np.hypot(((_l - pl + 180) % 360 - 180) * np.cos(np.radians(_b)), _b - pb) < pr for pl, pb, pr in PROTECT): continue
+    _r = BIG_HALO_K * np.sqrt(_a / np.pi) + BIG_HALO_PX
+    y0, y1, x0, x1 = int(max(0, _cy - 2 * _r)), int(min(_h, _cy + 2 * _r)), int(max(0, _cx - 2 * _r)), int(min(_w, _cx + 2 * _r))
+    d = np.hypot(_yy[y0:y1, x0:x1] - _cy, _xx[y0:y1, x0:x1] - _cx)
+    _big[y0:y1, x0:x1] = np.maximum(_big[y0:y1, x0:x1], np.clip((1.6 * _r - d) / (0.6 * _r), 0, 1))  # feathered disc
+    _nbig += 1
+print('big stars inpainted', _nbig)
+src = src * (1 - _big[..., None]) + np.minimum(_fill, src) * _big[..., None]
+im = Image.fromarray((src * 255 + 0.5).astype(np.uint8))
 med = np.asarray(im.filter(ImageFilter.MedianFilter(7))).astype(np.float64) / 255.0
 # selective star removal: replace only bright point stars (and a 1px halo) by the median; faint grain stays
 mask = ((src - med).max(-1) > STAR_K).astype(np.uint8) * 255
