@@ -497,3 +497,5 @@ The panorama/wall LOD in the float shader reads the real texture size, not a har
 
 ### Milky Way image credit
 Milky Way panorama: ESO/S. Brunier, "The Milky Way panorama" (eso0932a), https://www.eso.org/public/images/eso0932a/ — licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Modified: downscaled to 2048x1024, point stars removed with a median filter, darkened/contrast-tuned in shader.
+
+Andromeda: NASA/JPL-Caltech/UCLA (WISE), public domain — WISE infrared image of M31, stars removed, desaturated/dimmed and composited ~2.75° long into the Milky Way texture by tools/paint-m31.py.

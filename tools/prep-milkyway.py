@@ -87,7 +87,7 @@ print('big stars inpainted', _nbig)
 # MANUAL inpaint: small leftover oval (~23x10px @6000, l=216.6 b=+66.3, not a catalogued object; planet-removal
 # remnant) -> same feathered disc + ~120px median fill. Far from all other PROTECT entries.
 # + the photo's M31 blob (l=117.6 b=-23.3, ~3.5x1 deg, tilt ~47 deg): filled the same way, then repainted below as a
-#   deliberate small distant spiral (GALAXY_*). The M31 PROTECT entry only gates the big-star pass and is left as is.
+#   real WISE image of M31 by tools/paint-m31.py (procedural paint_galaxy kept but disabled). The M31 PROTECT entry only gates the big-star pass and is left as is.
 for _l, _b, _r in [(216.64, 66.25, 16.0), (117.6, -23.3, 26.0)]:
     _cx = (0.5 - ((_l + 180) % 360 - 180) / 360) * _w; _cy = (0.5 - _b / 180) * _h
     y0, y1, x0, x1 = int(_cy - 2 * _r), int(_cy + 2 * _r), int(_cx - 2 * _r), int(_cx + 2 * _r)
@@ -125,7 +125,7 @@ lat = np.linspace(1, -1, H)[:, None]
 gain = 1 + (gain[None, :] - 1) * np.exp(-(lat / 0.25) ** 2)  # only boost near the plane
 lin = lin * gain[..., None]
 bg = np.percentile(Y[:int(H*0.1)], 50); print('bg', bg, 'gain range', gain.min(), gain.max())
-lin = paint_galaxy(lin)
+# lin = paint_galaxy(lin)   # disabled: M31 is now the real WISE image, composited by tools/paint-m31.py
 lin = np.clip(lin, 0, 1)
 s = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1/2.4) - 0.055)
 Image.fromarray((s * 255 + 0.5).astype(np.uint8)).save(OUT, quality=95, subsampling=0)
