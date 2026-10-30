@@ -13,7 +13,7 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 const PLAYER_HEIGHT = 1.7;
 const JUPITER_DISTANCE = 900;                 // scene units (m)
 const JUPITER_RADIUS = JUPITER_DISTANCE * Math.tan(THREE.MathUtils.degToRad(6)); // ~12 deg across
-const SUN_DIR = new THREE.Vector3(0.55, 0.42, 0.35).normalize(); // low sun -> long shadows
+const SUN_DIR = new THREE.Vector3(0.55, 0.175, 0.35).normalize(); // low sun -> long shadows
 
 /* ---------------------------------------------------------- renderer / scene */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
