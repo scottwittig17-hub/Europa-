@@ -181,7 +181,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   // MW_M31_DIM < 1 dims just that patch of the photo (e.g. 0.5). 1.0 = off (as photographed).
   const MW_M31_DIM = 1.0;
   const M31_L = 117.7, M31_B = -24.0;  // where the eso0932a photo has M31 (~3.5 deg off nominal 121.2,-21.6)
-  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg?v=9d3bd92').catch(() => null);
+  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg?v=m45fill1').catch(() => null);
   if (mwTex) {
     mwTex.colorSpace = THREE.SRGBColorSpace;
     // mipmaps ON (mw-polish): without a mip chain the 4K photo is minified 2-5x at the edges of the
@@ -300,14 +300,38 @@ if (jupiterMesh) {
   skyRig.add(jupiter);
 }
 
-// Visible sun disc — a hard white point in a black sky.
+// Visible sun disc — small, warm yellow-white, with a faint soft halo so it reads as a sun, not a flat
+// white dot. Same philosophy as the galaxy: small and subtle. One extra sprite (one draw call, 64px texture).
 {
+  const SUN_COLOR = new THREE.Color().setRGB(1.0, 0.92, 0.72, THREE.SRGBColorSpace);  // soft warm yellow-white (disc, display value)
+  const SUN_GLOW_COLOR = new THREE.Color().setRGB(1.0, 0.85, 0.6, THREE.SRGBColorSpace);
+  const SUN_GLOW_SCALE = 4.5;     // halo diameter in disc diameters (disc ~0.7 deg -> halo ~3 deg)
+  const SUN_GLOW_OPACITY = 0.5;   // halo peak intensity (additive); 0 = off
+  const SUN_R = 9, SUN_D = 1500;  // disc radius / distance (~0.69 deg across, unchanged)
   const sunDisc = new THREE.Mesh(
-    new THREE.SphereGeometry(9, 16, 16),
-    new THREE.MeshBasicMaterial({ color: 0xffffff })
+    new THREE.SphereGeometry(SUN_R, 16, 16),
+    new THREE.MeshBasicMaterial({ color: SUN_COLOR, toneMapped: false })   // not tone mapped: ACES would push it back to white
   );
-  sunDisc.position.copy(SUN_DIR).multiplyScalar(1500);
+  sunDisc.position.copy(SUN_DIR).multiplyScalar(SUN_D);
   skyRig.add(sunDisc);
+  // halo: radial gradient starting at the disc's rim (empty inside, so it never adds onto the disc and clips it
+  // to white), falling to exactly 0 at the sprite edge (no hard rim)
+  const g0 = 1 / SUN_GLOW_SCALE;   // disc radius as a fraction of the halo radius
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+  const cx = cv.getContext('2d'), gr = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0.0, 'rgba(255,255,255,0)'); gr.addColorStop(g0 * 0.9, 'rgba(255,255,255,0)');
+  gr.addColorStop(g0 * 1.05, 'rgba(255,255,255,0.6)'); gr.addColorStop(0.4, 'rgba(255,255,255,0.14)');
+  gr.addColorStop(0.7, 'rgba(255,255,255,0.03)'); gr.addColorStop(1.0, 'rgba(255,255,255,0)');
+  cx.fillStyle = gr; cx.fillRect(0, 0, 64, 64);
+  const glowTex = new THREE.CanvasTexture(cv); glowTex.colorSpace = THREE.SRGBColorSpace;
+  // horizon-aware: fades out over the lowest MW_HFADE_DEG-ish 8 deg like the band (sun is ~25 deg up today)
+  const hz = Math.min(1, Math.max(0, SUN_DIR.y / Math.sin(8 * Math.PI / 180)));
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: SUN_GLOW_COLOR,
+    opacity: SUN_GLOW_OPACITY * hz * hz, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+  glow.scale.setScalar(SUN_R * 2 * SUN_GLOW_SCALE);
+  glow.position.copy(SUN_DIR).multiplyScalar(SUN_D - 20);
+  glow.renderOrder = SKY_ORDER.milkyWay + 1; glow.frustumCulled = false;
+  skyRig.add(glow);
 }
 
 /* ---------------------------------------------------------- procedural ice texture */
