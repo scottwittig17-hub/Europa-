@@ -33,6 +33,32 @@ PROTECT = [(-151.0, -19.4, 3.0),   # Orion nebula M42/M43 (l=209)  (l, b, radius
            (-57.2, -44.3, 3.0),    # SMC
            (-72.4, -0.6, 3.0)]     # Carina nebula / eta Car
 PROTECT_B = 4.0                    # also never touch |b| < PROTECT_B (galactic-plane knots, clusters, nebulae)
+# PAINTED GALAXY over the inpainted M31 spot (final linear 4096x2048, after grading): soft elliptical warm core +
+# faint tilted exponential disc (cooler) with a 2-arm log-spiral modulation and a dust lane on the near side.
+GALAXY_LB = (117.6, -23.3)         # centre (deg)
+GALAXY_PA = 47.0                   # major-axis angle in the texture (deg, image x->y), matches the photo blob
+GALAXY_MAJOR = 1.3                 # visible diameter along major axis (deg)
+GALAXY_Q = 0.38                    # minor/major axis ratio (tilt)
+GALAXY_PEAK = 0.075                # linear peak added at the core (~sRGB 0.30): faint, unsaturated
+def paint_galaxy(lin):
+    ppd = W / 360.0
+    cx = (0.5 - GALAXY_LB[0] / 360) * W; cy = (0.5 - GALAXY_LB[1] / 180) * H
+    R = int(GALAXY_MAJOR * ppd * 2); y0, x0 = int(cy) - R, int(cx) - R
+    yy, xx = np.mgrid[y0:y0 + 2 * R, x0:x0 + 2 * R].astype(np.float64)
+    th = np.radians(GALAXY_PA); dx, dy = xx + 0.5 - cx, yy + 0.5 - cy
+    u = dx * np.cos(th) + dy * np.sin(th); v = (-dx * np.sin(th) + dy * np.cos(th)) / GALAXY_Q   # deprojected disc
+    rs = GALAXY_MAJOR * ppd / 2                                   # visible radius (px)
+    r = np.hypot(u, v); phi = np.arctan2(v, u)
+    core = np.exp(-(np.hypot(u, v * GALAXY_Q / 0.6) / (0.16 * rs)) ** 2)          # rounder bulge
+    disc = np.exp(-r / (0.30 * rs)) * np.clip(1 - (r / (1.25 * rs)) ** 2, 0, 1) ** 2  # soft fall to zero, no edge
+    arms = 1 + 0.45 * np.cos(2 * (phi - np.log(np.maximum(r, 0.5) / (0.2 * rs)) / np.tan(np.radians(22)))) * np.clip(r / (0.35 * rs), 0, 1)
+    lane = 1 - 0.40 * np.exp(-((v * GALAXY_Q - 0.10 * rs) / (0.07 * rs)) ** 2) * np.clip(r / (0.25 * rs), 0, 1) * np.exp(-(r / rs) ** 2)
+    warm, cool = np.array([1.00, 0.88, 0.70]), np.array([0.82, 0.90, 1.00])
+    warm /= warm @ np.array([0.2126, 0.7152, 0.0722]); cool /= cool @ np.array([0.2126, 0.7152, 0.0722])
+    ic, idk = GALAXY_PEAK * 0.70 * core, GALAXY_PEAK * 0.30 * disc * arms
+    add = (ic[..., None] * warm + idk[..., None] * cool) * lane[..., None]
+    out = lin.copy(); out[y0:y0 + 2 * R, x0:x0 + 2 * R] += add
+    return out
 im = Image.open(SRC).convert('RGB')
 src = np.asarray(im).astype(np.float64) / 255.0
 from scipy import ndimage as nd
@@ -59,8 +85,10 @@ for _a, (_cy, _cx) in zip(_area, _com):
     _nbig += 1
 print('big stars inpainted', _nbig)
 # MANUAL inpaint: small leftover oval (~23x10px @6000, l=216.6 b=+66.3, not a catalogued object; planet-removal
-# remnant) -> same feathered disc + ~120px median fill. Far from all PROTECT entries (M31 untouched).
-for _l, _b, _r in [(216.64, 66.25, 16.0)]:
+# remnant) -> same feathered disc + ~120px median fill. Far from all other PROTECT entries.
+# + the photo's M31 blob (l=117.6 b=-23.3, ~3.5x1 deg, tilt ~47 deg): filled the same way, then repainted below as a
+#   real WISE image of M31 by tools/paint-m31.py (procedural paint_galaxy kept but disabled). The M31 PROTECT entry only gates the big-star pass and is left as is.
+for _l, _b, _r in [(216.64, 66.25, 16.0), (117.6, -23.3, 26.0)]:
     _cx = (0.5 - ((_l + 180) % 360 - 180) / 360) * _w; _cy = (0.5 - _b / 180) * _h
     y0, y1, x0, x1 = int(_cy - 2 * _r), int(_cy + 2 * _r), int(_cx - 2 * _r), int(_cx + 2 * _r)
     d = np.hypot(_yy[y0:y1, x0:x1] - _cy, _xx[y0:y1, x0:x1] - _cx)
@@ -97,6 +125,7 @@ lat = np.linspace(1, -1, H)[:, None]
 gain = 1 + (gain[None, :] - 1) * np.exp(-(lat / 0.25) ** 2)  # only boost near the plane
 lin = lin * gain[..., None]
 bg = np.percentile(Y[:int(H*0.1)], 50); print('bg', bg, 'gain range', gain.min(), gain.max())
+# lin = paint_galaxy(lin)   # disabled: M31 is now the real WISE image, composited by tools/paint-m31.py
 lin = np.clip(lin, 0, 1)
 s = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1/2.4) - 0.055)
 Image.fromarray((s * 255 + 0.5).astype(np.uint8)).save(OUT, quality=95, subsampling=0)
