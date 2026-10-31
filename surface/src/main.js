@@ -406,6 +406,18 @@ scene.add(ground);
 // [KAI] This is the per-teleport load/dispose architecture from the plan.
 // Each location owns an asset group; only the active one is resident.
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
+/* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
+ * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
+const BUILD = 'Build Oct 31 r2';
+{ const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
+const SCENE_VER = {
+  'open-ice': 'v3 solid rock',
+  crevasse: 'v2 4-panel',
+  ridge: 'v4 clean seams',
+  chaos: 'v3 Imagine, soft seams',
+  fissure: 'v2 Imagine back',
+  cavern: 'v1 jellies'
+};
 const locationGroups = new Map();
 let activeLocation = null;
 
@@ -450,7 +462,8 @@ function addVista(group, def, opt) {
     uniforms: {
       uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
       uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
-      uTopFade: { value: opt.topFade ?? 0.0 },
+      uTopFade: { value: opt.topFade ?? 0.0 }, uBot: { value: Math.max(opt.bottomFade ?? 0.16, 0.001) },   // bottomFade: soft bottom edge over the procedural ground (0.16 default)
+      uCrop: { value: new THREE.Vector2(opt.cropL ?? 0, opt.cropR ?? 0) },   // hard-cut this fraction of the panel off each side (no overlap with the neighbour)
       uSide: { value: new THREE.Vector2(...[].concat(opt.sideFade ?? 0.16, opt.sideFade ?? 0.16).slice(0, 2)) },
       uTint: { value: new THREE.Vector3(...(opt.tint || [1, 1, 1])) },
       uKeyBand: { value: new THREE.Vector2(...(opt.keyBand || [0.45, 0.62])) }
@@ -462,11 +475,12 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade; uniform vec2 uKeyBand, uSide; uniform vec3 uTint;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop; uniform vec3 uTint;
       void main() {
         vec4 t = texture2D(uMap, vUv);
         float a = smoothstep(0.0, uSide.x, vUv.x) * smoothstep(1.0, 1.0 - uSide.y, vUv.x) // side edges [left,right]
-                * smoothstep(0.0, 0.16, vUv.y);                                   // bottom edge (soft, over procedural ground)
+                * smoothstep(0.0, uBot, vUv.y);                                   // bottom edge (soft, over procedural ground)
+        a *= step(uCrop.x, vUv.x) * step(vUv.x, 1.0 - uCrop.y);
         if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
         if (uKey > 0.5) {                                                         // key the dark sky slot
           float l = dot(t.rgb /* linear */, vec3(0.299, 0.587, 0.114));
@@ -524,6 +538,7 @@ function setCaveEnvironment(on) {
   discs.forEach(d => { d.visible = on ? d.userData.locationId === 'cavern' : true; });
 }
 
+let vrUi = null;   // in-headset label + scene menu (built further down)
 let loadToken = 0;
 async function loadLocation(id) {
   if (activeLocation === id) return;
@@ -545,7 +560,8 @@ async function loadLocation(id) {
   next.loaded = true;
   if (wantCave) cavern.captureReflections(renderer, scene);
   rig.position.set(next.def.pos.x, next.def.playerY || 0, next.def.pos.z);
-  document.querySelector('#hud .loc').textContent = next.def.name;
+  document.querySelector('#hud .loc').textContent = `${next.def.name} · ${SCENE_VER[id] || ''}`;
+  if (vrUi) vrUi.refresh();
   document.querySelectorAll('#teleport-ui button').forEach(b =>
     b.classList.toggle('active', b.dataset.loc === id));
   setTimeout(() => { if (token === loadToken) fadeEl.style.opacity = '0'; }, 220);
@@ -594,12 +610,12 @@ registerLocation({
   build(group) {
     // painted surround: front is Mars's original; left, right and back were added to match it.
     // front on top (wide fades), sides next, back underneath. Dark sky slots are keyed out so the real stars show.
-    const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.01, keyHi: 0.022, keyBand: [0.78, 0.8] };
+    const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] };   // sky is baked to pure black in the pictures and rock is floored above it, so only the true sky keys out
     addVista(group, this, { vistas: [
-      { url: './assets/canyon-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.028, keyHi: 0.065, keyBand: [0.705, 0.725] },  // key only above the far-end sky slot (row ~0.28); the dark back of the canyon floor (rows 0.30-0.55) was being keyed out
+      { url: './assets/canyon-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
       { ...wall, url: './assets/vistas/canyon-left.jpg',  yawDeg: -75, sideFade: [0.16, 0.04] },
       { ...wall, url: './assets/vistas/canyon-right.jpg', yawDeg: 75,  sideFade: [0.04, 0.16] },
-      { url: './assets/vistas/canyon-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.04, keySky: true, keyLo: 0.01, keyHi: 0.022, keyBand: [0.72, 0.74] }
+      { url: './assets/vistas/canyon-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.04, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
     ] });
     groundTint(group, this.pos, 0x737a84, 160, 0.7);
     // no procedural ridges here any more: the four panels cover 360 deg and ridges poked above the painted horizon
@@ -638,10 +654,10 @@ registerLocation({
     // front on top, sides next, back underneath; near-hard side edges (0.008) so each panel reads as its own face with a crisp seam. Black painted sky is keyed out so the real stars show.
     const key = { keySky: true, keyLo: 0.012, keyHi: 0.022 };
     addVista(group, this, { vistas: [
-      { ...key, url: './assets/vistas/ridge-front.jpg', yawDeg: 0,   arcDeg: 116, horizon: 0.346, keyBand: [0.66, 0.69], order: 12, sideFade: 0.008, bright: 1.0 },
-      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: 0.008, bright: 0.88 },
-      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: 0.008, bright: 1.0 },
-      { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.008, bright: 0.62 }
+      { ...key, url: './assets/vistas/ridge-front.jpg', yawDeg: 0,   arcDeg: 116, horizon: 0.346, keyBand: [0.66, 0.69], order: 12, sideFade: 0.008, bottomFade: 0.02, bright: 1.0 },
+      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: 0.008, bottomFade: 0.02, bright: 0.88, cropL: 0.349 },
+      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: 0.008, bottomFade: 0.02, bright: 1.0, cropR: 0.349 },
+      { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.008, bottomFade: 0.02, bright: 0.62, cropL: 0.160, cropR: 0.160 }
     ] });
     groundTint(group, this.pos, 0x707888, 160, 0.7);
     pressureRidges(group, 12, 45, 2.4, this.pos);   // centred on the spot (was the world origin); capped below eye height so none poke above the painted horizon
@@ -661,9 +677,9 @@ registerLocation({
     const side = { arcDeg: 116, order: 11, keySky: true };
     addVista(group, this, { vistas: [
       { url: './assets/chaos-terrain-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.15, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.022, keyHi: 0.034, keyBand: [0.76, 0.84] },
-      { ...side, url: './assets/vistas/chaos-left.jpg',  yawDeg: -75, horizon: 0.17,  keyLo: 0.02, keyHi: 0.035, keyBand: [0.82, 0.85],   sideFade: [0.16, 0.04], bright: 1.2 },
-      { ...side, url: './assets/vistas/chaos-right.jpg', yawDeg: 75,  horizon: 0.325, keyLo: 0.012, keyHi: 0.022, keyBand: [0.665, 0.695], sideFade: [0.04, 0.16], bright: 0.85 },
-      { ...side, url: './assets/vistas/chaos-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.236, keyLo: 0.02, keyHi: 0.035, keyBand: [0.754, 0.784], sideFade: 0.04, bright: 1.25 }
+      { ...side, url: './assets/vistas/chaos-left.jpg',  yawDeg: -75, horizon: 0.17,  keyLo: 0.02, keyHi: 0.035, keyBand: [0.82, 0.85],   sideFade: [0.18, 0.04], bright: 1.2 },
+      { ...side, url: './assets/vistas/chaos-right.jpg', yawDeg: 75,  horizon: 0.325, keyLo: 0.012, keyHi: 0.022, keyBand: [0.665, 0.695], sideFade: [0.04, 0.18], bright: 0.75, tint: [1.05, 0.97, 0.92] },
+      { ...side, url: './assets/vistas/chaos-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.17,  keyLo: 0.02, keyHi: 0.035, keyBand: [0.82, 0.85],   sideFade: 0.04, bright: 1.2 }   // back = copy of the left picture (Scott's call: the sides look good, the old back had hard seams)
     ] });
     groundTint(group, this.pos, 0x767b86, 160, 0.7);
     // no procedural ridges: the four panels cover 360 deg and ridges poked above the painted horizon
@@ -677,9 +693,9 @@ registerLocation({
     // with a faint glow far below (the cavern's upwelling escaping through a pressure fissure).
     const side = { arcDeg: 116, order: 11, horizon: 0.125, keySky: true, keyLo: 0.012, keyHi: 0.022, keyBand: [0.84, 0.86] };
     addVista(group, this, { vistas: [
-      { url: './assets/fissure-vantage-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
-      { ...side, url: './assets/vistas/fissure-left.jpg',  yawDeg: -75, sideFade: [0.16, 0.04] },
-      { ...side, url: './assets/vistas/fissure-right.jpg', yawDeg: 75,  sideFade: [0.04, 0.16] },
+      { url: './assets/fissure-vantage-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.30, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
+      { ...side, url: './assets/vistas/fissure-left.jpg',  yawDeg: -75, sideFade: [0.30, 0.04], bright: 1.4 },
+      { ...side, url: './assets/vistas/fissure-right.jpg', yawDeg: 75,  sideFade: [0.04, 0.30], bright: 0.95 },
       { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.04, horizon: 0.252, keyBand: [0.738, 0.768] }   // Scott's Imagine render (3072 wide), horizon row measured
     ] });
     groundTint(group, this.pos, 0x7f8698, 160);   // blend procedural ice toward the still's foreground tone
@@ -738,6 +754,7 @@ for (let i = 0; i < 2; i++) {
     const m = new THREE.Matrix4().identity().extractRotation(ctl.matrixWorld);
     const dir = new THREE.Vector3(0, 0, -1).applyMatrix4(m).normalize();
     const origin = new THREE.Vector3().setFromMatrixPosition(ctl.matrixWorld);
+    if (vrUi && vrUi.handleSelect(origin, dir)) return;   // the scene menu takes the click first
     tryTeleportFromRay(origin, dir);
   });
   // [KAI] visible pointer ray so you can see where you aim
@@ -757,6 +774,87 @@ for (let i = 0; i < 2; i++) {
   rim.position.set(0, -0.12, -0.32);
   rim.rotation.set(0.15, 0, Math.PI * 0.925); // arc centered at bottom of view
   camera.add(rim); // camera is already in the scene graph via rig — children render fine
+}
+
+/* ---------------------------------------------------------- in-headset label + scene menu */
+// A small label sits low in view at all times (scene name, its version, the build).
+// Look down (or press A/X) and a scene menu opens: point a controller at a scene and pull the trigger.
+// B/Y jumps to the next scene. The page's HTML buttons can't be seen or pressed inside the headset.
+vrUi = (() => {
+  const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const ids = [...locationGroups.keys()];
+  const COLS = 3, ROWS = Math.ceil(ids.length / COLS);
+  const lab = { c: mk(1024, 150) }, menu = { c: mk(1024, 70 + ROWS * 150) };
+  for (const o of [lab, menu]) {
+    o.tex = new THREE.CanvasTexture(o.c); o.tex.colorSpace = THREE.SRGBColorSpace;
+  }
+  const quad = (o, wMeters, z, y) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(wMeters, wMeters * o.c.height / o.c.width),
+      new THREE.MeshBasicMaterial({ map: o.tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+    m.renderOrder = 300; m.position.set(0, y, z); m.frustumCulled = false; camera.add(m); return m;
+  };
+  lab.mesh = quad(lab, 0.5, -0.8, -0.27);
+  menu.mesh = quad(menu, 0.95, -0.95, -0.52); menu.mesh.visible = false;
+  let pinned = false;
+  const rr = (g, x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+  function draw() {
+    let g = lab.c.getContext('2d'); g.clearRect(0, 0, 1024, 150);
+    rr(g, 8, 8, 1008, 134, 28); g.fillStyle = 'rgba(4,14,24,0.78)'; g.fill(); g.strokeStyle = '#4f8fc0'; g.lineWidth = 3; g.stroke();
+    const d = locationGroups.get(activeLocation)?.def;
+    g.fillStyle = '#ffffff'; g.font = 'bold 54px sans-serif'; g.textAlign = 'center';
+    g.fillText(d ? d.name : '', 512, 70);
+    g.fillStyle = '#9fd8ff'; g.font = '36px sans-serif';
+    g.fillText(`${SCENE_VER[activeLocation] || ''}  ·  ${BUILD}`, 512, 118);
+    lab.tex.needsUpdate = true;
+    g = menu.c.getContext('2d'); g.clearRect(0, 0, 1024, menu.c.height);
+    rr(g, 8, 8, 1008, menu.c.height - 16, 30); g.fillStyle = 'rgba(4,14,24,0.88)'; g.fill(); g.strokeStyle = '#4f8fc0'; g.lineWidth = 3; g.stroke();
+    g.fillStyle = '#9fd8ff'; g.font = '34px sans-serif'; g.textAlign = 'center';
+    g.fillText(`Scenes  ·  ${BUILD}`, 512, 54);
+    ids.forEach((id, i) => {
+      const x = 28 + (i % COLS) * 328, y = 76 + Math.floor(i / COLS) * 150, on = id === activeLocation;
+      rr(g, x, y, 312, 136, 22); g.fillStyle = on ? '#1b4a73' : '#0e2a44'; g.fill(); g.strokeStyle = on ? '#8fd0ff' : '#2f5b85'; g.lineWidth = 3; g.stroke();
+      g.fillStyle = '#fff'; g.font = 'bold 36px sans-serif'; g.fillText(locationGroups.get(id).def.name, x + 156, y + 60, 290);
+      g.fillStyle = '#9fd8ff'; g.font = '28px sans-serif'; g.fillText(SCENE_VER[id] || '', x + 156, y + 106, 290);
+    });
+    menu.tex.needsUpdate = true;
+  }
+  const _o = new THREE.Vector3(), _d = new THREE.Vector3();
+  return {
+    refresh: draw,
+    get open() { return menu.mesh.visible; },
+    handleSelect(origin, dir) {
+      if (!menu.mesh.visible) return false;
+      menu.mesh.updateWorldMatrix(true, false);
+      raycaster.set(origin, dir);
+      const hit = raycaster.intersectObject(menu.mesh, false)[0];
+      if (!hit) return false;
+      const x = hit.uv.x * 1024, y = (1 - hit.uv.y) * menu.c.height;
+      const col = Math.floor((x - 28) / 328), row = Math.floor((y - 76) / 150), i = row * COLS + col;
+      if (col >= 0 && col < COLS && row >= 0 && ids[i]) loadLocation(ids[i]);
+      return true;   // a click on the menu panel never falls through to the cycle-scenes fallback
+    },
+    togglePin() { pinned = !pinned; },
+    update() {
+      camera.getWorldDirection(_d);
+      menu.mesh.visible = renderer.xr.isPresenting && (pinned || _d.y < -0.4);
+      lab.mesh.visible = renderer.xr.isPresenting && !menu.mesh.visible;
+    }
+  };
+})();
+vrUi.refresh();
+{ // controller buttons: A/X pins the menu open, B/Y jumps to the next scene
+  const was = new Map();
+  window.__pollPads = () => {
+    const sess = renderer.xr.getSession && renderer.xr.getSession(); if (!sess) return;
+    for (const src of sess.inputSources) {
+      const gp = src.gamepad; if (!gp) continue;
+      const prev = was.get(src) || [];
+      const press = i => gp.buttons[i] && gp.buttons[i].pressed && !prev[i];
+      if (press(4)) vrUi.togglePin();
+      if (press(5)) nextLocation();
+      was.set(src, gp.buttons.map(b => b.pressed));
+    }
+  };
 }
 
 /* ---------------------------------------------------------- desktop fallback + UI */
@@ -853,6 +951,9 @@ renderer.setAnimationLoop(() => {
   if (caveMode && cavern) cavern.update(Math.min(clock.getDelta(), 0.1), now * 0.001);
   else clock.getDelta();
   if (crackGlow && crackGlow.visible) crackGlow.material.opacity = crackGlow.userData.base * (0.8 + 0.2 * Math.sin(now * 0.0012));
+
+  if (renderer.xr.isPresenting) { window.__pollPads && window.__pollPads(); }
+  vrUi.update();
 
   // gentle disc pulse
   const s = 1 + Math.sin(now * 0.003) * 0.06;
