@@ -592,9 +592,17 @@ function pressureRidges(group, count, spread, hMax, center = new THREE.Vector3()
 registerLocation({
   id: 'open-ice', name: 'Canyon', pos: new THREE.Vector3(0, 0, 0),
   build(group) {
-    addVista(group, this, { url: './assets/canyon-vista.jpg', horizon: 0.47, arcDeg: 116, keySky: true, keyLo: 0.028, keyHi: 0.065, keyBand: [0.705, 0.725] });  // key only above the far-end sky slot (row ~0.28); the dark back of the canyon floor (rows 0.30-0.55) was being keyed out
+    // painted surround: front is Mars's original; left, right and back were added to match it.
+    // front on top (wide fades), sides next, back underneath. Dark sky slots are keyed out so the real stars show.
+    const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.01, keyHi: 0.022, keyBand: [0.78, 0.8] };
+    addVista(group, this, { vistas: [
+      { url: './assets/canyon-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.028, keyHi: 0.065, keyBand: [0.705, 0.725] },  // key only above the far-end sky slot (row ~0.28); the dark back of the canyon floor (rows 0.30-0.55) was being keyed out
+      { ...wall, url: './assets/vistas/canyon-left.jpg',  yawDeg: -75, sideFade: [0.16, 0.04] },
+      { ...wall, url: './assets/vistas/canyon-right.jpg', yawDeg: 75,  sideFade: [0.04, 0.16] },
+      { url: './assets/vistas/canyon-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.04, keySky: true, keyLo: 0.01, keyHi: 0.022, keyBand: [0.72, 0.74] }
+    ] });
     groundTint(group, this.pos, 0x737a84, 160, 0.7);
-    pressureRidges(group, 7, 60, 2.2, this.pos, true);
+    // no procedural ridges here any more: the four panels cover 360 deg and ridges poked above the painted horizon
   }
 });
 
