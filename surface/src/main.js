@@ -655,18 +655,34 @@ registerLocation({
 registerLocation({
   id: 'chaos', name: 'Chaos Terrain', pos: new THREE.Vector3(-20, 0, -160),
   build(group) {
-    addVista(group, this, { url: './assets/chaos-terrain-vista.jpg', horizon: 0.15, arcDeg: 116, keySky: true, keyLo: 0.022, keyHi: 0.034, keyBand: [0.76, 0.84] });
+    // painted surround: front is Mars's original; left, right and back were added (shattered ice, same horizon row).
+    // front on top (wide fades), sides next, back underneath. Black painted sky is keyed out so the real stars show.
+    const side = { arcDeg: 116, order: 11, horizon: 0.15, keySky: true, keyLo: 0.012, keyHi: 0.022, keyBand: [0.78, 0.82] };
+    addVista(group, this, { vistas: [
+      { url: './assets/chaos-terrain-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.15, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.022, keyHi: 0.034, keyBand: [0.76, 0.84] },
+      { ...side, url: './assets/vistas/chaos-left.jpg',  yawDeg: -75, sideFade: [0.16, 0.04] },
+      { ...side, url: './assets/vistas/chaos-right.jpg', yawDeg: 75,  sideFade: [0.04, 0.16] },
+      { ...side, url: './assets/vistas/chaos-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.04 }
+    ] });
     groundTint(group, this.pos, 0x767b86, 160, 0.7);
-    pressureRidges(group, 7, 50, 2.0, this.pos, true);
+    // no procedural ridges: the four panels cover 360 deg and ridges poked above the painted horizon
   }
 });
 
 registerLocation({
   id: 'fissure', name: 'Fissure Vantage', pos: new THREE.Vector3(160, 0, 110),
   build(group) {
-    addVista(group, this, { url: './assets/fissure-vantage-vista.jpg', horizon: 0.125, arcDeg: 116, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] });
+    // painted surround: front is Mars's original; left, right and back were added. The back view shows a deep fissure
+    // with a faint glow far below (the cavern's upwelling escaping through a pressure fissure).
+    const side = { arcDeg: 116, order: 11, horizon: 0.125, keySky: true, keyLo: 0.012, keyHi: 0.022, keyBand: [0.84, 0.86] };
+    addVista(group, this, { vistas: [
+      { url: './assets/fissure-vantage-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
+      { ...side, url: './assets/vistas/fissure-left.jpg',  yawDeg: -75, sideFade: [0.16, 0.04] },
+      { ...side, url: './assets/vistas/fissure-right.jpg', yawDeg: 75,  sideFade: [0.04, 0.16] },
+      { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.04 }
+    ] });
     groundTint(group, this.pos, 0x7f8698, 160);   // blend procedural ice toward the still's foreground tone
-    pressureRidges(group, 7, 50, 2.0, this.pos, true);
+    // no procedural ridges: the four panels cover 360 deg
   }
 });
 
