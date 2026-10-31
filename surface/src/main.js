@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { buildCavern, makeCrackGlow, CAVE_SPAWN } from './cavern.js';
 
 /* ---------------------------------------------------------- config */
 const PLAYER_HEIGHT = 1.7;
@@ -50,7 +51,8 @@ sun.shadow.bias = -0.0004;
 scene.add(sun, sun.target);
 
 // Faint fill: starlight + ice bounce. Kept low — shadows should stay deep.
-scene.add(new THREE.HemisphereLight(0x24344a, 0x0a1018, 0.35));
+const hemi = new THREE.HemisphereLight(0x24344a, 0x0a1018, 0.35);
+scene.add(hemi);
 
 // Jupiter-shine: a whisper of warm reflected light from Jupiter's direction.
 const jupiterDir = new THREE.Vector3(-0.52, 0.30, -0.80).normalize();
@@ -511,6 +513,17 @@ function disposeVista(entry) {
   }
 }
 
+/* cave mode: the shared sun, sky, Jupiter and ground plane are switched off; fog + cave lights live in the cavern group */
+let caveMode = false, cavern = null, crackGlow = null;
+function setCaveEnvironment(on) {
+  caveMode = on;
+  skyRig.visible = !on; ground.visible = !on; sun.visible = !on; jupiterShine.visible = !on; hemi.visible = !on;
+  scene.fog = on ? new THREE.FogExp2(0x010811, 0.02) : null;
+  scene.background.setHex(on ? 0x010811 : 0x000000);
+  if (crackGlow) crackGlow.visible = !on;
+  discs.forEach(d => { d.visible = on ? d.userData.locationId === 'cavern' : true; });
+}
+
 let loadToken = 0;
 async function loadLocation(id) {
   if (activeLocation === id) return;
@@ -522,8 +535,15 @@ async function loadLocation(id) {
   activeLocation = id;
   await loadVista(next);
   if (token !== loadToken) return;
+  const wantCave = id === 'cavern';
+  if (wantCave !== caveMode) {              // sun/sky/Jupiter/ground swap happens under the fade
+    await new Promise(r => setTimeout(r, 200));
+    if (token !== loadToken) return;
+    setCaveEnvironment(wantCave);
+  }
   next.group.visible = true;
   next.loaded = true;
+  if (wantCave) cavern.captureReflections(renderer, scene);
   rig.position.set(next.def.pos.x, next.def.playerY || 0, next.def.pos.z);
   document.querySelector('#hud .loc').textContent = next.def.name;
   document.querySelectorAll('#teleport-ui button').forEach(b =>
@@ -631,6 +651,12 @@ registerLocation({
   }
 });
 
+registerLocation({
+  id: 'cavern', name: 'Ice Cavern', pos: CAVE_SPAWN,
+  discPos: new THREE.Vector3(5.5, 0.06, 3.5),     // [KAI] the cave itself is far off the map; its disc sits near the Canyon entry
+  build(group) { cavern = buildCavern(group); }
+});
+
 /* ---------------------------------------------------------- teleport */
 const discs = [];
 {
@@ -639,10 +665,17 @@ const discs = [];
     const mat = new THREE.MeshBasicMaterial({ color: 0x54c8ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
     const disc = new THREE.Mesh(discGeo, mat);
     disc.rotation.x = -Math.PI / 2;
-    disc.position.set(def.pos.x, (def.playerY || 0) + 0.06, def.pos.z + 2.6);
+    if (def.discPos) disc.position.copy(def.discPos); else disc.position.set(def.pos.x, (def.playerY || 0) + 0.06, def.pos.z + 2.6);
     disc.userData.locationId = id;
     scene.add(disc); discs.push(disc);
   }
+}
+
+{ // faint cyan crack glow beside the cavern disc (visible from the surface only)
+  const dp = locationGroups.get('cavern').def.discPos;
+  crackGlow = makeCrackGlow();
+  crackGlow.position.set(dp.x + 1.2, 0.035, dp.z - 1.9); crackGlow.rotation.z = 1.0;
+  scene.add(crackGlow);
 }
 
 const raycaster = new THREE.Raycaster();
@@ -780,6 +813,10 @@ renderer.setAnimationLoop(() => {
   // sky stays glued to the player (fixed stars, motionless Jupiter)
   // camera-centred (incl. head height/XR head offset) so the sky has zero parallax
   camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
+
+  if (caveMode && cavern) cavern.update(Math.min(clock.getDelta(), 0.1), now * 0.001);
+  else clock.getDelta();
+  if (crackGlow && crackGlow.visible) crackGlow.material.opacity = crackGlow.userData.base * (0.8 + 0.2 * Math.sin(now * 0.0012));
 
   // gentle disc pulse
   const s = 1 + Math.sin(now * 0.003) * 0.06;
