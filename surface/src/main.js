@@ -408,12 +408,12 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Oct 31 r2';
+const BUILD = 'Build Oct 31 r3';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v3 solid rock',
   crevasse: 'v2 4-panel',
-  ridge: 'v4 clean seams',
+  ridge: 'v5 no spikes',
   chaos: 'v3 Imagine, soft seams',
   fissure: 'v2 Imagine back',
   cavern: 'v1 jellies'
@@ -660,7 +660,7 @@ registerLocation({
       { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.008, bottomFade: 0.02, bright: 0.62, cropL: 0.160, cropR: 0.160 }
     ] });
     groundTint(group, this.pos, 0x707888, 160, 0.7);
-    pressureRidges(group, 12, 45, 2.4, this.pos);   // centred on the spot (was the world origin); capped below eye height so none poke above the painted horizon
+    // no procedural ridges: they poked above the painted horizon as small spikes in the headset
     // overlook platform — a broad flat-topped rise
     const plat = new THREE.Mesh(new THREE.CylinderGeometry(9, 12, 2.4, 24), groundMat);
     plat.position.set(-95, 0.4, 105);
