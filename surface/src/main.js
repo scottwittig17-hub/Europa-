@@ -627,13 +627,13 @@ registerLocation({
   build(group) {
     // four painted panels cover 360 deg (front 0, right +75, back 180, left -75).
     // horizon rows measured per picture (first bright row at the image edge, as a fraction down from the top);
-    // front on top (wide fades), sides next, back underneath. Black painted sky is keyed out so the real stars show.
+    // front on top, sides next, back underneath; near-hard side edges (0.008) so each panel reads as its own face with a crisp seam. Black painted sky is keyed out so the real stars show.
     const key = { keySky: true, keyLo: 0.012, keyHi: 0.022 };
     addVista(group, this, { vistas: [
-      { ...key, url: './assets/vistas/ridge-front.jpg', yawDeg: 0,   arcDeg: 116, horizon: 0.346, keyBand: [0.66, 0.69], order: 12, sideFade: 0.22, bright: 1.0 },
-      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: [0.04, 0.16], bright: 0.88 },
-      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: [0.16, 0.04], bright: 1.0 },
-      { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.04, bright: 0.62 }
+      { ...key, url: './assets/vistas/ridge-front.jpg', yawDeg: 0,   arcDeg: 116, horizon: 0.346, keyBand: [0.66, 0.69], order: 12, sideFade: 0.008, bright: 1.0 },
+      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: 0.008, bright: 0.88 },
+      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: 0.008, bright: 1.0 },
+      { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.008, bright: 0.62 }
     ] });
     groundTint(group, this.pos, 0x707888, 160, 0.7);
     pressureRidges(group, 12, 45, 2.4, this.pos);   // centred on the spot (was the world origin); capped below eye height so none poke above the painted horizon
