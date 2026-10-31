@@ -679,7 +679,7 @@ registerLocation({
       { url: './assets/fissure-vantage-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
       { ...side, url: './assets/vistas/fissure-left.jpg',  yawDeg: -75, sideFade: [0.16, 0.04] },
       { ...side, url: './assets/vistas/fissure-right.jpg', yawDeg: 75,  sideFade: [0.04, 0.16] },
-      { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.04 }
+      { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.04, horizon: 0.175, keyBand: [0.79, 0.82] }   // horizon row measured on this picture
     ] });
     groundTint(group, this.pos, 0x7f8698, 160);   // blend procedural ice toward the still's foreground tone
     // no procedural ridges: the four panels cover 360 deg
