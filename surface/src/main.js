@@ -408,12 +408,12 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Oct 31 r4';
+const BUILD = 'Build Oct 31 r5';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v4 solid seams',
   crevasse: 'v2 4-panel',
-  ridge: 'v5 no spikes',
+  ridge: 'v6 soft crevasse join',
   chaos: 'v3 Imagine, soft seams',
   fissure: 'v2 Imagine back',
   cavern: 'v1 jellies'
@@ -654,9 +654,9 @@ registerLocation({
     // front on top, sides next, back underneath; near-hard side edges (0.008) so each panel reads as its own face with a crisp seam. Black painted sky is keyed out so the real stars show.
     const key = { keySky: true, keyLo: 0.012, keyHi: 0.022 };
     addVista(group, this, { vistas: [
-      { ...key, url: './assets/vistas/ridge-front.jpg', yawDeg: 0,   arcDeg: 116, horizon: 0.346, keyBand: [0.66, 0.69], order: 12, sideFade: 0.008, bottomFade: 0.02, bright: 1.0 },
-      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: 0.008, bottomFade: 0.02, bright: 0.88, cropL: 0.349 },
-      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: 0.008, bottomFade: 0.02, bright: 1.0, cropR: 0.349 },
+      { ...key, url: './assets/vistas/ridge-front.jpg', yawDeg: 0,   arcDeg: 116, horizon: 0.346, keyBand: [0.66, 0.69], order: 12, sideFade: [0.2, 0.2], bottomFade: 0.02, bright: 1.0 },
+      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: 0.008, bottomFade: 0.02, bright: 0.88, cropL: 0.15 },
+      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: 0.008, bottomFade: 0.02, bright: 1.0, cropR: 0.15 },
       { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.008, bottomFade: 0.02, bright: 0.62, cropL: 0.160, cropR: 0.160 }
     ] });
     groundTint(group, this.pos, 0x707888, 160, 0.7);
