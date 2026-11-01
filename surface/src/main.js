@@ -408,12 +408,12 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Oct 31 r5';
+const BUILD = 'Build Oct 31 r6';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v4 solid seams',
   crevasse: 'v2 4-panel',
-  ridge: 'v6 soft crevasse join',
+  ridge: 'v7 haze brush',
   chaos: 'v3 Imagine, soft seams',
   fissure: 'v2 Imagine back',
   cavern: 'v1 jellies'
@@ -502,6 +502,49 @@ function addVista(group, def, opt) {
   mesh.renderOrder = opt.order ?? 10; mesh.visible = false; mesh.frustumCulled = false;
   mesh.userData.vista = { url: opt.url, tex: null };
   group.add(mesh); (group.userData.vistas ||= []).push(mesh);
+}
+
+/* methane haze: a slow wind-driven veil of brushed streaks that sweeps across a join between painted panels,
+ * so a soft transition reads as weather over the terrain instead of a seam. Pure shader, no texture. */
+const hazeMats = [];
+function addHaze(group, def, o) {
+  const R = o.radius || 280, arc = THREE.MathUtils.degToRad(o.arcDeg || 60);
+  const yTop = o.top ?? 18, yBot = o.bottom ?? -170;               // vertical band in metres at radius R, relative to the eye
+  const geo = new THREE.CylinderGeometry(R, R, yTop - yBot, 48, 1, true, Math.PI - arc / 2, arc);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uAlpha: { value: o.alpha ?? 0.42 }, uCol: { value: new THREE.Vector3(...(o.color || [0.80, 0.88, 1.0])) },
+                uSpeed: { value: o.speed ?? 0.018 }, uStretch: { value: o.stretch ?? 7.0 }, uHorizon: { value: o.horizonV ?? 0.88 } },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = vec2(1.0 - uv.x, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      varying vec2 vUv; uniform float uTime, uAlpha, uSpeed, uStretch, uHorizon; uniform vec3 uCol;
+      float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+        return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+      float fbm(vec2 p){ float a = 0.5, s = 0.0; for(int i=0;i<4;i++){ s += a*n(p); p = p*2.03 + 7.1; a *= 0.5; } return s; }
+      void main() {
+        // streaks: noise stretched along the wind (horizontal), drifting, with a second slower layer moving a little faster/slower for shear
+        vec2 p1 = vec2(vUv.x * 5.0 - uTime * uSpeed * 6.0, vUv.y * uStretch);
+        vec2 p2 = vec2(vUv.x * 9.0 - uTime * uSpeed * 10.0 + 3.7, vUv.y * uStretch * 1.7 + 1.3);
+        float d = fbm(p1) * 0.65 + fbm(p2) * 0.35;
+        float streak = smoothstep(0.38, 0.78, d);
+        // brushed edge: the veil thins into streaks along its rim rather than a smooth fade
+        float env = smoothstep(0.0, 0.28, vUv.x) * smoothstep(1.0, 0.72, vUv.x);
+        float rim = mix(1.0, streak, 1.0 - env);
+        // vertical profile: densest low over the ground near the horizon, thinning upward into the sky
+        float below = smoothstep(uHorizon + 0.10, uHorizon - 0.06, vUv.y);      // fades out above the horizon
+        float low = smoothstep(0.0, 0.18, vUv.y);                               // and out at the very bottom
+        float a = uAlpha * env * rim * streak * below * low;
+        gl_FragColor = vec4(uCol, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(def.pos.x, (def.playerY || 0) + EYE + (yTop + yBot) / 2, def.pos.z);
+  m.rotation.y = -THREE.MathUtils.degToRad(o.yawDeg || 0);
+  m.renderOrder = 14; m.frustumCulled = false;
+  m.onBeforeRender = () => { mat.uniforms.uTime.value = performance.now() / 1000; };
+  group.add(m);
 }
 async function loadPanel(m) {
   if (!m.userData.vista.tex) {
@@ -659,6 +702,8 @@ registerLocation({
       { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: 0.008, bottomFade: 0.02, bright: 1.0, cropR: 0.15 },
       { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.008, bottomFade: 0.02, bright: 0.62, cropL: 0.160, cropR: 0.160 }
     ] });
+    addHaze(group, this, { yawDeg: -46, arcDeg: 56, alpha: 0.7 });
+    addHaze(group, this, { yawDeg: 46, arcDeg: 56, alpha: 0.34 });
     groundTint(group, this.pos, 0x707888, 160, 0.7);
     // no procedural ridges: they poked above the painted horizon as small spikes in the headset
     // overlook platform — a broad flat-topped rise
