@@ -79,20 +79,30 @@ const STAR_GLOW_TAIL = 0.18;    // brightest-tier halo strength (was 0.35)
 // dust gets full density compensation (3), catalog stars a gentle one so they never vanish.
 const DUST_EDGE_POW = 3.0;      // 0 = off
 const STAR_EDGE_POW = 1.0;      // 0 = off
-function roundStarMaterial(size, glow = false, edgePow = STAR_EDGE_POW) {
+function roundStarMaterial(size, glow = false, edgePow = STAR_EDGE_POW, sizeVar = false) {
   const px = Math.max(size * STAR_ROUND_SCALE, STAR_MIN_PX);
   const PROFILE = 0.249;        // integral of the disc profile over the unit point quad
   const gain = (size / px) ** 2 / PROFILE;
   return new THREE.ShaderMaterial({
     uniforms: { uSize: { value: px }, uGain: { value: gain }, uGlow: { value: glow ? STAR_GLOW_TAIL : 0 }, uEdgePow: { value: edgePow } },
     vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    defines: sizeVar ? { SIZE_VAR: 1 } : {},
     vertexShader: `
       uniform float uSize, uEdgePow; varying vec3 vCol;
+      #ifdef SIZE_VAR
+      attribute float aSize;
+      #endif
       void main() {
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         float c = max(-normalize(mv.xyz).z, 0.0);              // cos of angle off the view axis
         vCol = color * pow(c, uEdgePow);
-        gl_Position = projectionMatrix * mv; gl_PointSize = uSize; }`,
+        gl_Position = projectionMatrix * mv;
+        #ifdef SIZE_VAR
+        gl_PointSize = max(uSize * aSize, 2.0);
+        #else
+        gl_PointSize = uSize;
+        #endif
+      }`,
     fragmentShader: `
       uniform float uGain, uGlow; varying vec3 vCol;
       void main() {
@@ -172,11 +182,11 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   // MW_STRENGTH — overall Milky Way brightness, the single knob to tune.
   const MW_STRENGTH = 1.6;
   const MW_CAP = 0.24;        // max luminance of the band (hue-preserving cap)
-  const MW_CONTRAST = 1.35;   // >1: brighter core, darker rift lanes, dark sky outside
-  const MW_FEATHER = 0.012;   // soft knee: band haze fades into black sky over this luminance range (no visible 'tint' edge)
+  const MW_CONTRAST = 1.12;   // >1: brighter core, darker rift lanes, dark sky outside
+  const MW_FEATHER = 0.035;   // soft knee: band haze fades into black sky over this luminance range (no visible 'tint' edge)
   const MW_HFADE_DEG = 8;     // band dims to 0 over the lowest N degrees of elevation (reads as distant, not planted)
   const DUST_COUNT = 40000;   // procedural faint 'star dust' (NOT catalog stars; stars.json untouched). 0 = off
-  const DUST_GAIN = 1.4;      // star-dust brightness (was 1.0; smaller crisper sprites read dimmer on-axis)
+  const DUST_GAIN = 0.95;      // star-dust brightness (was 1.0; smaller crisper sprites read dimmer on-axis)
   const DUST_SIZE = 0.8;      // star-dust point size before STAR_ROUND_SCALE/MIN (was 1.0 -> 3 px; now 2.2 px)
   // M31 (Andromeda) — the lens-shaped oval off the band, upper-right of the forward view. It is the
   // REAL galaxy (protected in tools/prep-milkyway.py), drawn ~2.5 deg long, brighter than to the eye.
@@ -251,15 +261,15 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
     // (rejection-sampled against the texture's luminance). One extra draw call, ~1 MB. Grain the
     // 4K photo can't give at Quest pixel density. Separate from the Hipparcos catalog.
     if (DUST_COUNT > 0 && mwTex.image) {
-      const img = mwTex.image, cw = 1024, ch = 512;
+      const img = mwTex.image, cw = 2048, ch = 1024;
       const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
       const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, cw, ch);
       const px = cx.getImageData(0, 0, cw, ch).data;
       const lum = i => (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
       let rnd = 12345; const R = () => ((rnd = (rnd * 1664525 + 1013904223) >>> 0) / 4294967296);
-      const pos = new Float32Array(DUST_COUNT * 3), col = new Float32Array(DUST_COUNT * 3);
+      const pos = new Float32Array(DUST_COUNT * 3), col = new Float32Array(DUST_COUNT * 3), siz = new Float32Array(DUST_COUNT);
       const DR = 1450, v = new THREE.Vector3();
-      let n = 0, guard = 0;
+      let n = 0, guard = 0, m2 = 0;
       while (n < DUST_COUNT && guard++ < DUST_COUNT * 60) {
         const u = R(), z = R() * 2 - 1;                       // uniform on sphere in galactic frame
         const l = (0.5 - u) * Math.PI * 2, b = Math.asin(z);
@@ -274,13 +284,16 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
         const m = (0.10 + 0.35 * Math.pow(R(), 3) + 0.25 * Math.min(1, Y / 0.4)) * DUST_GAIN * hz * hz;
         pos.set([v.x * DR, v.y * DR, v.z * DR], n * 3);
         const w = 0.85 + 0.15 * R();
-        col.set([m * (px[k] / 255 * 0.5 + 0.5), m * (px[k + 1] / 255 * 0.5 + 0.5) * w, m * (px[k + 2] / 255 * 0.5 + 0.5) * w * w], n * 3);
+        const big = Math.pow(R(), 5);                          // a few bright, larger dots; many dim, small ones
+        siz[n] = 0.75 + 1.1 * big; m2 = m * (0.45 + 2.6 * big);
+        col.set([m2 * (px[k] / 255 * 0.5 + 0.5), m2 * (px[k + 1] / 255 * 0.5 + 0.5) * w, m2 * (px[k + 2] / 255 * 0.5 + 0.5) * w * w], n * 3);
         n++;
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, n * 3), 3));
       g.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, n * 3), 3));
-      const dust = new THREE.Points(g, roundStarMaterial(DUST_SIZE, false, DUST_EDGE_POW));   // round soft sprites too (no 1px squares)
+      g.setAttribute('aSize', new THREE.BufferAttribute(siz.subarray(0, n), 1));
+      const dust = new THREE.Points(g, roundStarMaterial(DUST_SIZE, false, DUST_EDGE_POW, true));   // round soft sprites too (no 1px squares)
       dust.renderOrder = SKY_ORDER.starDust; dust.frustumCulled = false;
       skyRig.add(dust);
     }
@@ -408,7 +421,7 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Oct 31 r8';
+const BUILD = 'Build Oct 31 r9s';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v7 sloped rear crags',
@@ -618,6 +631,7 @@ async function loadLocation(id) {
   next.loaded = true;
   if (wantCave) cavern.captureReflections(renderer, scene);
   rig.position.set(next.def.pos.x, next.def.playerY || 0, next.def.pos.z);
+  rig.rotation.y = 0;   // a new scene always starts facing its front picture (undo any snap turns)
   document.querySelector('#hud .loc').textContent = `${next.def.name} · ${SCENE_VER[id] || ''}`;
   if (vrUi) vrUi.refresh();
   document.querySelectorAll('#teleport-ui button').forEach(b =>
@@ -693,7 +707,7 @@ registerLocation({
     // back is 140 deg wide (uniformly scaled) so it overlaps each side by ~23 deg instead of 11.
     const side = { arcDeg: 116, order: 11, keySky: true, bright: SIDE_BRIGHT, tint: SIDE_TINT };
     addVista(group, this, { vistas: [
-      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.02, topFade: 0.08, sideFade: 0.22, order: 12 },
+      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.02, topFade: 0.14, sideFade: 0.22, order: 12 },
       { ...side, url: './assets/vistas/crevasse-left.jpg',  yawDeg: -75, horizon: LEFT_H.h, keyLo: LEFT_H.lo, keyHi: LEFT_H.hi, keyBand: LEFT_H.band, sideFade: [0.16, 0.04] },
       { ...side, url: './assets/vistas/crevasse-right.jpg', yawDeg: 75,  horizon: RIGHT_H.h, keyLo: RIGHT_H.lo, keyHi: RIGHT_H.hi, keyBand: RIGHT_H.band, sideFade: [0.04, 0.16] },
       { url: './assets/vistas/crevasse-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.275, keySky: true, keyLo: 0.012, keyHi: 0.020, keyBand: [0.70, 0.73], sideFade: 0.04, bright: BACK_BRIGHT, tint: BACK_TINT }
@@ -904,8 +918,20 @@ vrUi = (() => {
   };
 })();
 vrUi.refresh();
+const SNAP_TURN_DEG = 30;   // joystick snap-turn step (push the stick left/right once per step); 30 by default, was asked not to be 45
+function snapTurn(deg) {
+  // rotate the rig about the player's head so the view turns in place (no sideways slide)
+  const before = new THREE.Vector3(); camera.getWorldPosition(before);
+  rig.rotation.y += THREE.MathUtils.degToRad(deg);
+  rig.updateMatrixWorld(true);
+  const after = new THREE.Vector3(); camera.getWorldPosition(after);
+  rig.position.x += before.x - after.x; rig.position.z += before.z - after.z;
+  rig.updateMatrixWorld(true);
+}
+window.__snapTurn = snapTurn;
 { // controller buttons: A/X pins the menu open, B/Y jumps to the next scene
   const was = new Map();
+  const stickArmed = new Map();   // per controller: true once the stick has returned near centre
   window.__pollPads = () => {
     const sess = renderer.xr.getSession && renderer.xr.getSession(); if (!sess) return;
     for (const src of sess.inputSources) {
@@ -914,6 +940,10 @@ vrUi.refresh();
       const press = i => gp.buttons[i] && gp.buttons[i].pressed && !prev[i];
       if (press(4)) vrUi.togglePin();
       if (press(5)) nextLocation();
+      const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);   // thumbstick left/right
+      const armed = stickArmed.get(src) !== false;
+      if (armed && Math.abs(sx) > 0.7) { snapTurn(sx > 0 ? -SNAP_TURN_DEG : SNAP_TURN_DEG); stickArmed.set(src, false); }
+      else if (!armed && Math.abs(sx) < 0.3) stickArmed.set(src, true);
       was.set(src, gp.buttons.map(b => b.pressed));
     }
   };
