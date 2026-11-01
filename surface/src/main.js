@@ -411,7 +411,7 @@ scene.add(ground);
 const BUILD = 'Build Oct 31 r4';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
-  'open-ice': 'v3 solid rock',
+  'open-ice': 'v4 solid seams',
   crevasse: 'v2 4-panel',
   ridge: 'v5 no spikes',
   chaos: 'v3 Imagine, soft seams',
