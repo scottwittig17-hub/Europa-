@@ -408,12 +408,12 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Oct 31 r6';
+const BUILD = 'Build Oct 31 r7';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v5 clean edges',
   crevasse: 'v2 4-panel',
-  ridge: 'v7 haze, matched front',
+  ridge: 'v8 static haze, one texture',
   chaos: 'v3 Imagine, soft seams',
   fissure: 'v2 Imagine back',
   cavern: 'v1 jellies'
@@ -518,16 +518,17 @@ function addHaze(group, def, o) {
     vertexShader: `varying vec2 vUv; void main(){ vUv = vec2(1.0 - uv.x, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `
       varying vec2 vUv; uniform float uTime, uAlpha, uSpeed, uStretch, uHorizon; uniform vec3 uCol;
-      float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+      float h(vec2 p){ vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }   // sin-free hash: stable on mobile GPUs
+      float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*f*(f*(f*6.0-15.0)+10.0);
         return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
-      float fbm(vec2 p){ float a = 0.5, s = 0.0; for(int i=0;i<4;i++){ s += a*n(p); p = p*2.03 + 7.1; a *= 0.5; } return s; }
+      float fbm(vec2 p){ float a = 0.5, s = 0.0; mat2 r = mat2(0.8, -0.6, 0.6, 0.8); for(int i=0;i<4;i++){ s += a*n(p); p = r*p*2.03 + 7.1; a *= 0.5; } return s; }
       void main() {
         // streaks: noise stretched along the wind (horizontal), drifting, with a second slower layer moving a little faster/slower for shear
-        vec2 p1 = vec2(vUv.x * 5.0 - uTime * uSpeed * 6.0, vUv.y * uStretch);
-        vec2 p2 = vec2(vUv.x * 9.0 - uTime * uSpeed * 10.0 + 3.7, vUv.y * uStretch * 1.7 + 1.3);
+        vec2 w = vec2(n(vUv * vec2(3.0, 5.0)), n(vUv * vec2(4.0, 3.0) + 9.0)) - 0.5;   // domain warp so the cells never line up as squares
+        vec2 p1 = vec2(vUv.x * 5.0 + w.x * 1.6, vUv.y * uStretch + w.y * 2.0);
+        vec2 p2 = vec2(vUv.x * 9.0 + 3.7 - w.y * 2.0, vUv.y * uStretch * 1.7 + 1.3 + w.x * 2.0);
         float d = fbm(p1) * 0.65 + fbm(p2) * 0.35;
-        float streak = smoothstep(0.38, 0.78, d);
+        float streak = smoothstep(0.30, 0.90, d);
         // brushed edge: the veil thins into streaks along its rim rather than a smooth fade
         float env = smoothstep(0.0, 0.28, vUv.x) * smoothstep(1.0, 0.72, vUv.x);
         float rim = mix(1.0, streak, 1.0 - env);
@@ -543,7 +544,7 @@ function addHaze(group, def, o) {
   m.position.set(def.pos.x, (def.playerY || 0) + EYE + (yTop + yBot) / 2, def.pos.z);
   m.rotation.y = -THREE.MathUtils.degToRad(o.yawDeg || 0);
   m.renderOrder = 14; m.frustumCulled = false;
-  m.onBeforeRender = () => { mat.uniforms.uTime.value = performance.now() / 1000; };
+  // static on purpose: no drift, so it never reads as a rotating carousel
   group.add(m);
 }
 async function loadPanel(m) {
@@ -698,9 +699,9 @@ registerLocation({
     const key = { keySky: true, keyLo: 0.012, keyHi: 0.022 };
     addVista(group, this, { vistas: [
       { ...key, url: './assets/vistas/ridge-front.jpg?v=7', yawDeg: 0,   arcDeg: 116, horizon: 0.374, keyBand: [0.63, 0.66], order: 12, sideFade: [0.2, 0.2], bottomFade: 0.02, bright: 0.88 },
-      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: [0.008, 0.08], bottomFade: 0.02, bright: 0.88, cropL: 0.15 },
-      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: [0.08, 0.008], bottomFade: 0.02, bright: 1.0, cropR: 0.15 },
-      { ...key, url: './assets/vistas/ridge-back.jpg',  yawDeg: 180, arcDeg: 140, horizon: 0.332, keyBand: [0.66, 0.69], order: 10, sideFade: 0.008, bottomFade: 0.02, bright: 0.62, cropL: 0.08, cropR: 0.08 }
+      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: [0.008, 0.30], bottomFade: 0.02, bright: 0.88, cropL: 0.15 },
+      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: [0.30, 0.008], bottomFade: 0.02, bright: 1.0, cropR: 0.15 },
+      { ...key, url: './assets/vistas/ridge-back.jpg?v=7',  yawDeg: 180, arcDeg: 172, horizon: 0.374, keyBand: [0.63, 0.66], order: 10, sideFade: 0.008, bottomFade: 0.02, bright: 0.88 }
     ] });
     addHaze(group, this, { yawDeg: -46, arcDeg: 56, alpha: 0.7 });
     addHaze(group, this, { yawDeg: 46, arcDeg: 56, alpha: 0.34 });
