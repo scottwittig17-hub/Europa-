@@ -655,10 +655,10 @@ registerLocation({
     // front on top (wide fades), sides next, back underneath. Dark sky slots are keyed out so the real stars show.
     const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] };   // sky is baked to pure black in the pictures and rock is floored above it, so only the true sky keys out
     addVista(group, this, { vistas: [
-      { url: './assets/canyon-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.03, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
-      { ...wall, url: './assets/vistas/canyon-left.jpg',  yawDeg: -75, sideFade: 0.03 },
-      { ...wall, url: './assets/vistas/canyon-right.jpg', yawDeg: 75,  sideFade: 0.03 },
-      { url: './assets/vistas/canyon-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.03, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
+      { url: './assets/canyon-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.003, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
+      { ...wall, url: './assets/vistas/canyon-left.jpg',  yawDeg: -75, sideFade: 0.003, cropR: 0.349 },
+      { ...wall, url: './assets/vistas/canyon-right.jpg', yawDeg: 75,  sideFade: 0.003, cropL: 0.349 },
+      { url: './assets/vistas/canyon-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.003, cropL: 0.160, cropR: 0.160, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
     ] });
     groundTint(group, this.pos, 0x737a84, 160, 0.7);
     // no procedural ridges here any more: the four panels cover 360 deg and ridges poked above the painted horizon
