@@ -408,14 +408,14 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Oct 31 r8';
+const BUILD = 'Build Oct 31 r9f';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v7 sloped rear crags',
   crevasse: 'v2 4-panel',
   ridge: 'v8 static haze, one texture',
   chaos: 'v3 Imagine, soft seams',
-  fissure: 'v3 haze, rust muted',
+  fissure: 'v4 haze below the wall',
   cavern: 'v1 jellies'
 };
 const locationGroups = new Map();
@@ -758,8 +758,8 @@ registerLocation({
       { ...side, url: './assets/vistas/fissure-right.jpg?v=9', yawDeg: 75,  sideFade: [0.04, 0.30], bright: 0.95 },
       { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.04, horizon: 0.252, keyBand: [0.738, 0.768] }   // Scott's Imagine render (3072 wide), horizon row measured
     ] });
-    addHaze(group, this, { yawDeg: -38, arcDeg: 56, alpha: 0.65 });   // static haze over the soft joins, so they read as weather
-    addHaze(group, this, { yawDeg: 38, arcDeg: 56, alpha: 0.4 });
+    addHaze(group, this, { yawDeg: -44, arcDeg: 44, alpha: 0.32, top: -26 });   // static haze over the soft joins, so they read as weather
+    addHaze(group, this, { yawDeg: 44, arcDeg: 44, alpha: 0.26, top: -26 });
     groundTint(group, this.pos, 0x7f8698, 160);   // blend procedural ice toward the still's foreground tone
     // no procedural ridges: the four panels cover 360 deg
   }
