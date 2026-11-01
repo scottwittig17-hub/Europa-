@@ -425,7 +425,7 @@ const BUILD = 'Build Oct 31 r9s';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v7 sloped rear crags',
-  crevasse: 'v2 4-panel',
+  crevasse: 'v3 clean horizon',
   ridge: 'v8 static haze, one texture',
   chaos: 'v3 Imagine, soft seams',
   fissure: 'v3 haze, rust muted',
@@ -707,7 +707,7 @@ registerLocation({
     // back is 140 deg wide (uniformly scaled) so it overlaps each side by ~23 deg instead of 11.
     const side = { arcDeg: 116, order: 11, keySky: true, bright: SIDE_BRIGHT, tint: SIDE_TINT };
     addVista(group, this, { vistas: [
-      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.02, topFade: 0.14, sideFade: 0.22, order: 12 },
+      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.02, topFade: 0.025, sideFade: 0.22, order: 12 },
       { ...side, url: './assets/vistas/crevasse-left.jpg',  yawDeg: -75, horizon: LEFT_H.h, keyLo: LEFT_H.lo, keyHi: LEFT_H.hi, keyBand: LEFT_H.band, sideFade: [0.16, 0.04] },
       { ...side, url: './assets/vistas/crevasse-right.jpg', yawDeg: 75,  horizon: RIGHT_H.h, keyLo: RIGHT_H.lo, keyHi: RIGHT_H.hi, keyBand: RIGHT_H.band, sideFade: [0.04, 0.16] },
       { url: './assets/vistas/crevasse-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.275, keySky: true, keyLo: 0.012, keyHi: 0.020, keyBand: [0.70, 0.73], sideFade: 0.04, bright: BACK_BRIGHT, tint: BACK_TINT }
