@@ -411,7 +411,7 @@ scene.add(ground);
 const BUILD = 'Build Oct 31 r7';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
-  'open-ice': 'v5 clean edges',
+  'open-ice': 'v6 sloped wall ends',
   crevasse: 'v2 4-panel',
   ridge: 'v8 static haze, one texture',
   chaos: 'v3 Imagine, soft seams',
@@ -463,6 +463,7 @@ function addVista(group, def, opt) {
       uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
       uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
       uTopFade: { value: opt.topFade ?? 0.0 }, uBot: { value: Math.max(opt.bottomFade ?? 0.16, 0.001) },   // bottomFade: soft bottom edge over the procedural ground (0.16 default)
+      uBevel: { value: new THREE.Vector2(opt.bevelW ?? 0, opt.bevelY ?? 1) },   // crumbly slope that lowers a tall wall's top toward its crop edge (no square corner)
       uCrop: { value: new THREE.Vector2(opt.cropL ?? 0, opt.cropR ?? 0) },   // hard-cut this fraction of the panel off each side (no overlap with the neighbour)
       uSide: { value: new THREE.Vector2(...[].concat(opt.sideFade ?? 0.16, opt.sideFade ?? 0.16).slice(0, 2)) },
       uTint: { value: new THREE.Vector3(...(opt.tint || [1, 1, 1])) },
@@ -475,12 +476,22 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop; uniform vec3 uTint;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop, uBevel; uniform vec3 uTint;
+      float bh(float x){ return fract(sin(x * 12.9898) * 43758.5453); }
       void main() {
         vec4 t = texture2D(uMap, vUv);
         float a = smoothstep(0.0, uSide.x, vUv.x) * smoothstep(1.0, 1.0 - uSide.y, vUv.x) // side edges [left,right]
                 * smoothstep(0.0, uBot, vUv.y);                                   // bottom edge (soft, over procedural ground)
         a *= step(uCrop.x, vUv.x) * step(vUv.x, 1.0 - uCrop.y);
+        if (uBevel.x > 0.0) {
+          float de = 9.0;
+          if (uCrop.x > 0.0) de = min(de, vUv.x - uCrop.x);
+          if (uCrop.y > 0.0) de = min(de, 1.0 - uCrop.y - vUv.x);
+          if (uCrop.x <= 0.0 && uCrop.y <= 0.0) de = min(vUv.x, 1.0 - vUv.x);
+          float ymax = mix(uBevel.y, 2.0, smoothstep(0.0, uBevel.x, de));
+          ymax += (bh(floor(de * 70.0)) - 0.5) * 0.05 * smoothstep(0.0, 0.03, de) + (bh(floor(de * 260.0) + 11.0) - 0.5) * 0.03;   // crumbly steps
+          a *= 1.0 - smoothstep(ymax - 0.003, ymax + 0.003, vUv.y);
+        }
         if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
         if (uKey > 0.5) {                                                         // key the dark sky slot
           float l = dot(t.rgb /* linear */, vec3(0.299, 0.587, 0.114));
@@ -656,7 +667,7 @@ registerLocation({
     // front on top (wide fades), sides next, back underneath. Dark sky slots are keyed out so the real stars show.
     const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] };   // sky is baked to pure black in the pictures and rock is floored above it, so only the true sky keys out
     addVista(group, this, { vistas: [
-      { url: './assets/canyon-vista.jpg?v=6', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.003, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
+      { url: './assets/canyon-vista.jpg?v=6', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.003, bevelW: 0.20, bevelY: 0.855, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
       { ...wall, url: './assets/vistas/canyon-left.jpg?v=6',  yawDeg: -75, sideFade: 0.003, cropR: 0.349 },
       { ...wall, url: './assets/vistas/canyon-right.jpg?v=6', yawDeg: 75,  sideFade: 0.003, cropL: 0.349 },
       { url: './assets/vistas/canyon-back.jpg?v=6', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.003, cropL: 0.160, cropR: 0.160, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
