@@ -180,8 +180,8 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   const GAL_CENTER = new THREE.Vector3(-0.0548, -0.4838, 0.8734).normalize(); // l=0,b=0, J2000
   const GAL_Y = new THREE.Vector3().crossVectors(GAL_POLE, GAL_CENTER).normalize(); // l=90
   // MW_STRENGTH — overall Milky Way brightness, the single knob to tune.
-  const MW_STRENGTH = 1.0;
-  const MW_CAP = 0.13;        // max luminance of the band (hue-preserving cap)
+  const MW_STRENGTH = 1.6;
+  const MW_CAP = 0.24;        // max luminance of the band (hue-preserving cap)
   const MW_CONTRAST = 1.12;   // >1: brighter core, darker rift lanes, dark sky outside
   const MW_FEATHER = 0.035;   // soft knee: band haze fades into black sky over this luminance range (no visible 'tint' edge)
   const MW_HFADE_DEG = 8;     // band dims to 0 over the lowest N degrees of elevation (reads as distant, not planted)
@@ -192,8 +192,6 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   // REAL galaxy (protected in tools/prep-milkyway.py), drawn ~2.5 deg long, brighter than to the eye.
   // MW_M31_DIM < 1 dims just that patch of the photo (e.g. 0.5). 1.0 = off (as photographed).
   const MW_M31_DIM = 1.0;
-  const MW_COOL = 'vec3(0.78, 0.92, 1.14)';   // r10: the ESO photo is warm (R:B about 1:0.73, same as the sun halo); grade it to cool blue-white starlight
-  const MW_WARM_KEEP = 0.22;                // how much of the photo's own colour variation survives (0 = pure cool tint)
   const M31_L = 117.7, M31_B = -24.0;  // where the eso0932a photo has M31 (~3.5 deg off nominal 121.2,-21.6)
   const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg?v=m45fill1').catch(() => null);
   if (mwTex) {
@@ -206,7 +204,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
     mwTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     mwTex.wrapS = THREE.RepeatWrapping;
     const mat = new THREE.ShaderMaterial({
-      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3), MW_FEATHER: MW_FEATHER.toFixed(4), MW_WARM_KEEP: MW_WARM_KEEP.toFixed(3), MW_COOL },
+      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3), MW_FEATHER: MW_FEATHER.toFixed(4) },
       uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y },
         uM31: { value: new THREE.Vector3().copy(GAL_CENTER).multiplyScalar(Math.cos(M31_B * Math.PI / 180) * Math.cos(M31_L * Math.PI / 180))
           .addScaledVector(GAL_Y, Math.cos(M31_B * Math.PI / 180) * Math.sin(M31_L * Math.PI / 180)).addScaledVector(GAL_POLE, Math.sin(M31_B * Math.PI / 180)) },
@@ -240,9 +238,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
           float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
           float Yc = pow(max(Y - 0.004, 0.0), MW_CONTRAST) * 1.6;   // contrast on luminance only (keeps hue)
           Yc *= smoothstep(0.004, 0.004 + MW_FEATHER, Y);           // feathered edge of the haze
-          vec3 cg = mix(vec3(Y), c, MW_WARM_KEEP) * MW_COOL;       // cool starlight grade, decoupled from the sun's warm colour
-          cg *= Y / max(dot(cg, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
-          vec3 color = cg * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
+          vec3 color = c * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
           float Ym = dot(color, vec3(0.2126, 0.7152, 0.0722));
           color *= min(1.0, MW_CAP / max(Ym, 1e-5));             // hue-preserving brightness cap
           // horizon: no atmosphere, but a band at full brightness right down to the ice reads as
@@ -290,7 +286,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
         const w = 0.85 + 0.15 * R();
         const big = Math.pow(R(), 5);                          // a few bright, larger dots; many dim, small ones
         siz[n] = 0.75 + 1.1 * big; m2 = m * (0.45 + 2.6 * big);
-        col.set([m2 * 0.80 * (0.75 + 0.25 * w), m2 * 0.93 * (0.85 + 0.15 * w), m2 * 1.10], n * 3);   // r10: cool blue-white dust, not photo-warm
+        col.set([m2 * (px[k] / 255 * 0.5 + 0.5), m2 * (px[k + 1] / 255 * 0.5 + 0.5) * w, m2 * (px[k + 2] / 255 * 0.5 + 0.5) * w * w], n * 3);
         n++;
       }
       const g = new THREE.BufferGeometry();
@@ -425,7 +421,7 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Nov 1 r10c';
+const BUILD = 'Build Nov 2 r11s sky r9';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v9 soft rear blend',
