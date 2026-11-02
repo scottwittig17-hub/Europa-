@@ -180,8 +180,8 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   const GAL_CENTER = new THREE.Vector3(-0.0548, -0.4838, 0.8734).normalize(); // l=0,b=0, J2000
   const GAL_Y = new THREE.Vector3().crossVectors(GAL_POLE, GAL_CENTER).normalize(); // l=90
   // MW_STRENGTH — overall Milky Way brightness, the single knob to tune.
-  const MW_STRENGTH = 1.6;
-  const MW_CAP = 0.24;        // max luminance of the band (hue-preserving cap)
+  const MW_STRENGTH = 1.0;
+  const MW_CAP = 0.13;        // max luminance of the band (hue-preserving cap)
   const MW_CONTRAST = 1.12;   // >1: brighter core, darker rift lanes, dark sky outside
   const MW_FEATHER = 0.035;   // soft knee: band haze fades into black sky over this luminance range (no visible 'tint' edge)
   const MW_HFADE_DEG = 8;     // band dims to 0 over the lowest N degrees of elevation (reads as distant, not planted)
@@ -192,6 +192,8 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   // REAL galaxy (protected in tools/prep-milkyway.py), drawn ~2.5 deg long, brighter than to the eye.
   // MW_M31_DIM < 1 dims just that patch of the photo (e.g. 0.5). 1.0 = off (as photographed).
   const MW_M31_DIM = 1.0;
+  const MW_COOL = 'vec3(0.78, 0.92, 1.14)';   // r10: the ESO photo is warm (R:B about 1:0.73, same as the sun halo); grade it to cool blue-white starlight
+  const MW_WARM_KEEP = 0.22;                // how much of the photo's own colour variation survives (0 = pure cool tint)
   const M31_L = 117.7, M31_B = -24.0;  // where the eso0932a photo has M31 (~3.5 deg off nominal 121.2,-21.6)
   const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-4k.jpg?v=m45fill1').catch(() => null);
   if (mwTex) {
@@ -204,7 +206,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
     mwTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     mwTex.wrapS = THREE.RepeatWrapping;
     const mat = new THREE.ShaderMaterial({
-      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3), MW_FEATHER: MW_FEATHER.toFixed(4) },
+      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3), MW_FEATHER: MW_FEATHER.toFixed(4), MW_WARM_KEEP: MW_WARM_KEEP.toFixed(3), MW_COOL },
       uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y },
         uM31: { value: new THREE.Vector3().copy(GAL_CENTER).multiplyScalar(Math.cos(M31_B * Math.PI / 180) * Math.cos(M31_L * Math.PI / 180))
           .addScaledVector(GAL_Y, Math.cos(M31_B * Math.PI / 180) * Math.sin(M31_L * Math.PI / 180)).addScaledVector(GAL_POLE, Math.sin(M31_B * Math.PI / 180)) },
@@ -238,7 +240,9 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
           float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
           float Yc = pow(max(Y - 0.004, 0.0), MW_CONTRAST) * 1.6;   // contrast on luminance only (keeps hue)
           Yc *= smoothstep(0.004, 0.004 + MW_FEATHER, Y);           // feathered edge of the haze
-          vec3 color = c * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
+          vec3 cg = mix(vec3(Y), c, MW_WARM_KEEP) * MW_COOL;       // cool starlight grade, decoupled from the sun's warm colour
+          cg *= Y / max(dot(cg, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+          vec3 color = cg * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
           float Ym = dot(color, vec3(0.2126, 0.7152, 0.0722));
           color *= min(1.0, MW_CAP / max(Ym, 1e-5));             // hue-preserving brightness cap
           // horizon: no atmosphere, but a band at full brightness right down to the ice reads as
@@ -286,7 +290,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
         const w = 0.85 + 0.15 * R();
         const big = Math.pow(R(), 5);                          // a few bright, larger dots; many dim, small ones
         siz[n] = 0.75 + 1.1 * big; m2 = m * (0.45 + 2.6 * big);
-        col.set([m2 * (px[k] / 255 * 0.5 + 0.5), m2 * (px[k + 1] / 255 * 0.5 + 0.5) * w, m2 * (px[k + 2] / 255 * 0.5 + 0.5) * w * w], n * 3);
+        col.set([m2 * 0.80 * (0.75 + 0.25 * w), m2 * 0.93 * (0.85 + 0.15 * w), m2 * 1.10], n * 3);   // r10: cool blue-white dust, not photo-warm
         n++;
       }
       const g = new THREE.BufferGeometry();
@@ -421,14 +425,14 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Oct 31 r9';
+const BUILD = 'Build Nov 1 r10';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
-  'open-ice': 'v7 sloped rear crags',
+  'open-ice': 'v8 clean rim',
   crevasse: 'v3 clean horizon',
   ridge: 'v8 static haze, one texture',
   chaos: 'v3 Imagine, soft seams',
-  fissure: 'v4 haze below the wall',
+  fissure: 'v5 cracks muted, soft corners',
   cavern: 'v1 jellies'
 };
 const locationGroups = new Map();
@@ -477,6 +481,7 @@ function addVista(group, def, opt) {
       uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
       uTopFade: { value: opt.topFade ?? 0.0 }, uBot: { value: Math.max(opt.bottomFade ?? 0.16, 0.001) },   // bottomFade: soft bottom edge over the procedural ground (0.16 default)
       uBevel: { value: new THREE.Vector3(opt.bevelW ?? 0, opt.bevelY ?? 1, opt.bevelEdge ?? 0) },   // z: 0 = crop edges (or both edges), 1 = image-left edge only, 2 = image-right edge only
+      uEdgeGain: { value: new THREE.Vector3(...(opt.edgeGain || [1, 1, 0.01])) },   // r10: brightness ramp toward the image's left/right edge (match a darker panel to its neighbours)
       uBevelDummy: { value: 0 },   // crumbly slope that lowers a tall wall's top toward its crop edge (no square corner)
       uCrop: { value: new THREE.Vector2(opt.cropL ?? 0, opt.cropR ?? 0) },   // hard-cut this fraction of the panel off each side (no overlap with the neighbour)
       uSide: { value: new THREE.Vector2(...[].concat(opt.sideFade ?? 0.16, opt.sideFade ?? 0.16).slice(0, 2)) },
@@ -490,7 +495,7 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop; uniform vec3 uBevel, uTint;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop; uniform vec3 uBevel, uTint, uEdgeGain;
       float bh(float x){ return fract(sin(x * 12.9898) * 43758.5453); }
       void main() {
         vec4 t = texture2D(uMap, vUv);
@@ -505,7 +510,7 @@ function addVista(group, def, opt) {
           if (uBevel.z > 0.5 && uBevel.z < 1.5) de = vUv.x;
           if (uBevel.z > 1.5) de = 1.0 - vUv.x;
           float ymax = mix(uBevel.y, 2.0, smoothstep(0.0, uBevel.x, de));
-          ymax += (bh(floor(de * 70.0)) - 0.5) * 0.05 * smoothstep(0.0, 0.03, de) + (bh(floor(de * 260.0) + 11.0) - 0.5) * 0.03;   // crumbly steps
+          ymax += (bh(floor(de * 40.0)) - 0.5) * 0.03 * smoothstep(0.0, 0.03, de) + (bh(floor(de * 120.0) + 11.0) - 0.5) * 0.006;   // r10: calmer crumbly steps (the fine jitter read as flakes at the rim)
           a *= 1.0 - smoothstep(ymax - 0.003, ymax + 0.003, vUv.y);
         }
         if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
@@ -517,7 +522,8 @@ function addVista(group, def, opt) {
           float k = smoothstep(uKeyLo, uKeyHi, l) * smoothstep(uKeyLo * 0.6, uKeyHi * 0.8, lb);
           a *= mix(1.0, k, smoothstep(uKeyBand.x, uKeyBand.y, vUv.y));                        // only the top of the frame
         }
-        gl_FragColor = vec4(t.rgb * uBright * uTint, a);
+        float eg = mix(uEdgeGain.x, 1.0, smoothstep(0.0, uEdgeGain.z, vUv.x)) * mix(uEdgeGain.y, 1.0, smoothstep(0.0, uEdgeGain.z, 1.0 - vUv.x));
+        gl_FragColor = vec4(t.rgb * uBright * uTint * eg, a);
         #include <colorspace_fragment>
       }`
   });
@@ -684,10 +690,10 @@ registerLocation({
     // front on top (wide fades), sides next, back underneath. Dark sky slots are keyed out so the real stars show.
     const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] };   // sky is baked to pure black in the pictures and rock is floored above it, so only the true sky keys out
     addVista(group, this, { vistas: [
-      { url: './assets/canyon-vista.jpg?v=6', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.003, bevelW: 0.20, bevelY: 0.855, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
-      { ...wall, url: './assets/vistas/canyon-left.jpg?v=6',  yawDeg: -75, sideFade: 0.003, cropR: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 1 },
-      { ...wall, url: './assets/vistas/canyon-right.jpg?v=6', yawDeg: 75,  sideFade: 0.003, cropL: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 2 },
-      { url: './assets/vistas/canyon-back.jpg?v=6', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.003, cropL: 0.160, cropR: 0.160, bevelW: 0.2, bevelY: 0.80, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
+      { url: './assets/canyon-vista.jpg?v=7', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.003, bevelW: 0.20, bevelY: 0.855, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
+      { ...wall, url: './assets/vistas/canyon-left.jpg?v=7',  yawDeg: -75, sideFade: 0.003, cropR: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 1 },
+      { ...wall, url: './assets/vistas/canyon-right.jpg?v=7', yawDeg: 75,  sideFade: 0.003, cropL: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 2 },
+      { url: './assets/vistas/canyon-back.jpg?v=7', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.003, cropL: 0.160, cropR: 0.160, bevelW: 0.2, bevelY: 0.80, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
     ] });
     groundTint(group, this.pos, 0x737a84, 160, 0.7);
     // no procedural ridges here any more: the four panels cover 360 deg and ridges poked above the painted horizon
@@ -767,10 +773,10 @@ registerLocation({
     // with a faint glow far below (the cavern's upwelling escaping through a pressure fissure).
     const side = { arcDeg: 116, order: 11, horizon: 0.125, keySky: true, keyLo: 0.012, keyHi: 0.022, keyBand: [0.84, 0.86] };
     addVista(group, this, { vistas: [
-      { url: './assets/fissure-vantage-vista.jpg?v=9', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.30, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
-      { ...side, url: './assets/vistas/fissure-left.jpg?v=9',  yawDeg: -75, sideFade: [0.30, 0.04], bright: 1.4 },
-      { ...side, url: './assets/vistas/fissure-right.jpg?v=9', yawDeg: 75,  sideFade: [0.04, 0.30], bright: 0.95 },
-      { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.04, horizon: 0.252, keyBand: [0.738, 0.768] }   // Scott's Imagine render (3072 wide), horizon row measured
+      { url: './assets/fissure-vantage-vista.jpg?v=10', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.30, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
+      { ...side, url: './assets/vistas/fissure-left.jpg?v=10',  yawDeg: -75, sideFade: [0.30, 0.38], bright: 1.4 },
+      { ...side, url: './assets/vistas/fissure-right.jpg?v=10', yawDeg: 75,  sideFade: [0.38, 0.30], bright: 0.95 },
+      { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.25, edgeGain: [2.3, 4.0, 0.45], horizon: 0.252, keyBand: [0.738, 0.768] }   // Scott's Imagine render (3072 wide), horizon row measured
     ] });
     addHaze(group, this, { yawDeg: -44, arcDeg: 44, alpha: 0.32, top: -26 });   // static haze over the soft joins, so they read as weather
     addHaze(group, this, { yawDeg: 44, arcDeg: 44, alpha: 0.26, top: -26 });
