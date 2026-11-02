@@ -425,10 +425,10 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Nov 1 r10';
+const BUILD = 'Build Nov 1 r10b';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
-  'open-ice': 'v8 clean rim',
+  'open-ice': 'v9 soft rear blend',
   crevasse: 'v3 clean horizon',
   ridge: 'v8 static haze, one texture',
   chaos: 'v3 Imagine, soft seams',
@@ -482,6 +482,8 @@ function addVista(group, def, opt) {
       uTopFade: { value: opt.topFade ?? 0.0 }, uBot: { value: Math.max(opt.bottomFade ?? 0.16, 0.001) },   // bottomFade: soft bottom edge over the procedural ground (0.16 default)
       uBevel: { value: new THREE.Vector3(opt.bevelW ?? 0, opt.bevelY ?? 1, opt.bevelEdge ?? 0) },   // z: 0 = crop edges (or both edges), 1 = image-left edge only, 2 = image-right edge only
       uEdgeGain: { value: new THREE.Vector3(...(opt.edgeGain || [1, 1, 0.01])) },   // r10: brightness ramp toward the image's left/right edge (match a darker panel to its neighbours)
+      uBevelRef: { value: new THREE.Vector2(...(opt.bevelRef || [-9, -9])) },   // r10: measure the bevel from these uv x positions instead of the crop edges (lets a panel extend under its neighbour's fade without changing the crag silhouette)
+      uFadeY: { value: opt.fadeBelowY ?? 3.0 },
       uBevelDummy: { value: 0 },   // crumbly slope that lowers a tall wall's top toward its crop edge (no square corner)
       uCrop: { value: new THREE.Vector2(opt.cropL ?? 0, opt.cropR ?? 0) },   // hard-cut this fraction of the panel off each side (no overlap with the neighbour)
       uSide: { value: new THREE.Vector2(...[].concat(opt.sideFade ?? 0.16, opt.sideFade ?? 0.16).slice(0, 2)) },
@@ -495,11 +497,13 @@ function addVista(group, def, opt) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       varying vec2 vUv;
-      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop; uniform vec3 uBevel, uTint, uEdgeGain;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop; uniform vec3 uBevel, uTint, uEdgeGain; uniform vec2 uBevelRef; uniform float uFadeY;
       float bh(float x){ return fract(sin(x * 12.9898) * 43758.5453); }
       void main() {
         vec4 t = texture2D(uMap, vUv);
-        float a = smoothstep(0.0, uSide.x, vUv.x) * smoothstep(1.0, 1.0 - uSide.y, vUv.x) // side edges [left,right]
+        float eSide = smoothstep(0.0, uSide.x, vUv.x) * smoothstep(1.0, 1.0 - uSide.y, vUv.x);   // side edges [left,right]
+        eSide = mix(eSide, 1.0, smoothstep(uFadeY - 0.03, uFadeY + 0.05, vUv.y));                 // r10: above uFadeY the side fade is off, so a crossfade never shows as a ghost wedge against the sky
+        float a = eSide
                 * smoothstep(0.0, uBot, vUv.y);                                   // bottom edge (soft, over procedural ground)
         a *= step(uCrop.x, vUv.x) * step(vUv.x, 1.0 - uCrop.y);
         if (uBevel.x > 0.0) {
@@ -507,6 +511,7 @@ function addVista(group, def, opt) {
           if (uCrop.x > 0.0) de = min(de, vUv.x - uCrop.x);
           if (uCrop.y > 0.0) de = min(de, 1.0 - uCrop.y - vUv.x);
           if (uCrop.x <= 0.0 && uCrop.y <= 0.0) de = min(vUv.x, 1.0 - vUv.x);
+          if (uBevelRef.x > -5.0) de = min(vUv.x - uBevelRef.x, uBevelRef.y - vUv.x);
           if (uBevel.z > 0.5 && uBevel.z < 1.5) de = vUv.x;
           if (uBevel.z > 1.5) de = 1.0 - vUv.x;
           float ymax = mix(uBevel.y, 2.0, smoothstep(0.0, uBevel.x, de));
@@ -691,9 +696,9 @@ registerLocation({
     const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] };   // sky is baked to pure black in the pictures and rock is floored above it, so only the true sky keys out
     addVista(group, this, { vistas: [
       { url: './assets/canyon-vista.jpg?v=7', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.003, bevelW: 0.20, bevelY: 0.855, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
-      { ...wall, url: './assets/vistas/canyon-left.jpg?v=7',  yawDeg: -75, sideFade: 0.003, cropR: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 1 },
-      { ...wall, url: './assets/vistas/canyon-right.jpg?v=7', yawDeg: 75,  sideFade: 0.003, cropL: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 2 },
-      { url: './assets/vistas/canyon-back.jpg?v=7', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.003, cropL: 0.160, cropR: 0.160, bevelW: 0.2, bevelY: 0.80, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
+      { ...wall, url: './assets/vistas/canyon-left.jpg?v=7',  yawDeg: -75, sideFade: [0.17, 0.003], fadeBelowY: 0.76, cropR: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 1 },
+      { ...wall, url: './assets/vistas/canyon-right.jpg?v=7', yawDeg: 75,  sideFade: [0.003, 0.17], fadeBelowY: 0.76, cropL: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 2 },
+      { url: './assets/vistas/canyon-back.jpg?v=7', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.003, bevelRef: [0.160, 0.840], bevelW: 0.2, bevelY: 0.80, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
     ] });
     groundTint(group, this.pos, 0x737a84, 160, 0.7);
     // no procedural ridges here any more: the four panels cover 360 deg and ridges poked above the painted horizon
