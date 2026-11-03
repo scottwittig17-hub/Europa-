@@ -421,14 +421,14 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Nov 2 r11u naked-eye Upscayl sky';
+const BUILD = 'Build Nov 2 r11f Fissure sides back to r9';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v9 soft rear blend',
   crevasse: 'v3 clean horizon',
   ridge: 'v8 static haze, one texture',
   chaos: 'v3 Imagine, soft seams',
-  fissure: 'v6 cracks and crevice softened',
+  fissure: 'v7 sides back to r9, front v6',
   cavern: 'v1 jellies'
 };
 const locationGroups = new Map();
@@ -775,8 +775,8 @@ registerLocation({
     const side = { arcDeg: 116, order: 11, horizon: 0.125, keySky: true, keyLo: 0.012, keyHi: 0.022, keyBand: [0.84, 0.86] };
     addVista(group, this, { vistas: [
       { url: './assets/fissure-vantage-vista.jpg?v=11', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.30, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
-      { ...side, url: './assets/vistas/fissure-left.jpg?v=10',  yawDeg: -75, sideFade: [0.30, 0.38], bright: 1.4 },
-      { ...side, url: './assets/vistas/fissure-right.jpg?v=10', yawDeg: 75,  sideFade: [0.38, 0.30], bright: 0.95 },
+      { ...side, url: './assets/vistas/fissure-left.jpg?v=r9',  yawDeg: -75, sideFade: [0.30, 0.04], bright: 1.4 },
+      { ...side, url: './assets/vistas/fissure-right.jpg?v=r9', yawDeg: 75,  sideFade: [0.04, 0.30], bright: 0.95 },
       { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.25, edgeGain: [2.3, 4.0, 0.45], horizon: 0.252, keyBand: [0.738, 0.768] }   // Scott's Imagine render (3072 wide), horizon row measured
     ] });
     addHaze(group, this, { yawDeg: -44, arcDeg: 44, alpha: 0.32, top: -26 });   // static haze over the soft joins, so they read as weather
