@@ -1,0 +1,1068 @@
+/* EUROPA — Surface section spike (three.js r160, WebXR)
+ *
+ * Proves: the look (sunlit ice, motionless Jupiter, black sky) and the 90 fps
+ * budget on PC Link. Kai integrates into the main Europa build.
+ *
+ * Architecture notes for Kai are inline, marked [KAI].
+ */
+
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { buildCavern, makeCrackGlow, CAVE_SPAWN } from './cavern.js';
+
+/* ---------------------------------------------------------- config */
+const PLAYER_HEIGHT = 1.7;
+const JUPITER_DISTANCE = 900;                 // scene units (m)
+const JUPITER_RADIUS = JUPITER_DISTANCE * Math.tan(THREE.MathUtils.degToRad(6)); // ~12 deg across
+const SUN_DIR = new THREE.Vector3(0.55, 0.42, 0.35).normalize(); // low sun -> long shadows
+
+/* ---------------------------------------------------------- renderer / scene */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 4000);
+const rig = new THREE.Group();          // moving the rig moves the player
+rig.position.set(0, 0, 0);
+rig.add(camera);
+camera.position.set(0, PLAYER_HEIGHT, 0);
+scene.add(rig);
+
+/* ---------------------------------------------------------- lights */
+// Hard sunlight — no atmosphere on Europa, so no sky bounce, just a point source.
+const sun = new THREE.DirectionalLight(0xfff4e0, 3.2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 10;
+sun.shadow.camera.far = 400;
+sun.shadow.camera.left = -45; sun.shadow.camera.right = 45;
+sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45;
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+
+// Faint fill: starlight + ice bounce. Kept low — shadows should stay deep.
+const hemi = new THREE.HemisphereLight(0x24344a, 0x0a1018, 0.35);
+scene.add(hemi);
+
+// Jupiter-shine: a whisper of warm reflected light from Jupiter's direction.
+const jupiterDir = new THREE.Vector3(-0.52, 0.30, -0.80).normalize();
+const jupiterShine = new THREE.DirectionalLight(0xd8b48f, 0.18);
+jupiterShine.position.copy(jupiterDir).multiplyScalar(100);
+scene.add(jupiterShine);
+
+// Round star sprites — gl.POINTS without a sprite are hard pixel squares (the square stars seen
+// in-headset outside the Milky Way haze). Ported from Mars's mars/star-sprites idea (radial
+// sprite per point) as a tiny shader instead of a canvas texture: each point is drawn
+// STAR_ROUND_SCALE x wider (min STAR_MIN_PX) with a soft gaussian disc from gl_PointCoord, and
+// its colour scaled so total light per star matches the old square (no brighter/dimmer sky).
+// Fixed pixel size (no distance attenuation — the sky is at infinity); on Quest the XR
+// framebuffer is ~1 device px per px, so 3-5 px sprites resolve as round, not as blocks.
+// mw-polish (Quest feedback 'clusters oversized/blobby'): 1.7 -> 1.25, min 3.0 -> 2.2, glow 0.35 -> 0.18.
+// Total light per star is still conserved (gain below), so smaller = crisper, not dimmer.
+const STAR_ROUND_SCALE = 1.25;  // sprite diameter / old square size (was 1.7)
+const STAR_MIN_PX = 2.2;        // smallest sprite that still reads as a disc (was 3.0)
+const STAR_GLOW_TAIL = 0.18;    // brightest-tier halo strength (was 0.35)
+// Peripheral 'film' + shimmer fix: points have a FIXED pixel size, but toward the edge of a wide
+// (Quest ~104-110 deg) rectilinear eye buffer each pixel covers up to ~5x more sky (cos^3 of the
+// off-axis angle), so 40k dust sprites pile up into a grey haze there, which the headset's lens-
+// distortion pass then minifies and aliases into shimmer. Fade by cos(off-axis)^EDGE_POW:
+// dust gets full density compensation (3), catalog stars a gentle one so they never vanish.
+const DUST_EDGE_POW = 3.0;      // 0 = off
+const STAR_EDGE_POW = 1.0;      // 0 = off
+function roundStarMaterial(size, glow = false, edgePow = STAR_EDGE_POW, sizeVar = false) {
+  const px = Math.max(size * STAR_ROUND_SCALE, STAR_MIN_PX);
+  const PROFILE = 0.249;        // integral of the disc profile over the unit point quad
+  const gain = (size / px) ** 2 / PROFILE;
+  return new THREE.ShaderMaterial({
+    uniforms: { uSize: { value: px }, uGain: { value: gain }, uGlow: { value: glow ? STAR_GLOW_TAIL : 0 }, uEdgePow: { value: edgePow } },
+    vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    defines: sizeVar ? { SIZE_VAR: 1 } : {},
+    vertexShader: `
+      uniform float uSize, uEdgePow; varying vec3 vCol;
+      #ifdef SIZE_VAR
+      attribute float aSize;
+      #endif
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float c = max(-normalize(mv.xyz).z, 0.0);              // cos of angle off the view axis
+        vCol = color * pow(c, uEdgePow);
+        gl_Position = projectionMatrix * mv;
+        #ifdef SIZE_VAR
+        gl_PointSize = max(uSize * aSize, 2.0);
+        #else
+        gl_PointSize = uSize;
+        #endif
+      }`,
+    fragmentShader: `
+      uniform float uGain, uGlow; varying vec3 vCol;
+      void main() {
+        float r = length(gl_PointCoord - 0.5);                  // 0 centre .. 0.5 edge
+        float a = exp(-12.0 * r * r) + uGlow * exp(-4.0 * r * r) * (1.0 - 2.0 * r);
+        a *= 1.0 - smoothstep(0.42, 0.5, r);                    // round, no square corners
+        if (a < 0.002) discard;
+        gl_FragColor = vec4(vCol * a * uGain, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`
+  });
+}
+
+/* ---------------------------------------------------------- sky rig (follows player XZ) */
+const skyRig = new THREE.Group();
+scene.add(skyRig);
+
+// Stars — the real Hipparcos catalog (assets/stars.json), baked by tools/bake-stars.py:
+// 8,870 real stars, true positions, true B-V colors, brightness pre-scaled by Vmag.
+// Sorted brightest-first, so the first tier is the naked-eye standouts.
+// [KAI] Keep this path relative to the spike's index.html if surface/ moves.
+{
+  let starData = null;
+  try {
+    const res = await fetch('./assets/stars.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    starData = await res.json();
+  } catch (e) { console.warn('[europa] star catalog missing — band-only sky', e); }
+
+  if (starData && starData.stars && starData.stars.length) {
+    // tiers after Mars's star-sprites branch (60 glow / 360 crisp / rest); positions untouched
+    const STAR_R = 1560, tiers = [{ count: 60, size: 2.8, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    let offset = 0;
+    for (const t of tiers) {
+      const n = Math.min(t.count, starData.stars.length - offset);
+      if (n <= 0) break;
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const s = starData.stars[offset + i];
+        let y = s[1]; if (y < -0.04) y = Math.abs(y); // keep a few below-horizon ones out of the dirt
+        pos.set([s[0] * STAR_R, y * STAR_R, s[2] * STAR_R], i * 3);
+        col.set([s[3], s[4], s[5]], i * 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      skyRig.add(new THREE.Points(g, roundStarMaterial(t.size, t.glow)));
+      offset += n;
+    }
+  }
+}
+
+// Sky draw order — explicit and pose-independent. three.js sorts transparent
+// objects by the projected centre of each geometry's bounding sphere; the star
+// tiers' centres sit off-origin (centroid of the catalogue) while the Milky Way
+// sphere's is the origin, so their order flipped with head pose. When the stars
+// drew AFTER the band, normal blending (opacity 0.98) overwrote the bright haze
+// with the faint stars' near-black colours: dark dots near Jupiter. Fixed: stars
+// first (renderOrder 1), band added on top (renderOrder 2), Jupiter opaque.
+const SKY_ORDER = { stars: 1, starDust: 1.5, milkyWay: 2 };
+for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars;
+
+// Milky Way — a REAL all-sky photograph, locked to the REAL galactic plane.
+// Image: ESO/S. Brunier, "The Milky Way panorama" (eso0932a), CC BY 4.0,
+// https://www.eso.org/public/images/eso0932a/ — equirectangular in galactic
+// coordinates (l=0 at centre, l increasing to the left, b=+90 at top).
+// Preprocessed by tools/prep-milkyway.py to 4096x2048: 7px median at 6000px so
+// point stars are removed (the Hipparcos catalog, stars.json, stays the only star
+// source), mosaic/JPEG seams smoothed, magenta cast graded to warm starlight with
+// tan dust, and band brightness evened out along longitude. The galactic frame below is expressed in the SAME convention
+// as tools/bake-stars.py (x = cos d cos a, y = sin d, z = -cos d sin a).
+{
+  const GAL_POLE = new THREE.Vector3(-0.8677, 0.4560, 0.1981).normalize();   // NGP, J2000
+  const GAL_CENTER = new THREE.Vector3(-0.0548, -0.4838, 0.8734).normalize(); // l=0,b=0, J2000
+  const GAL_Y = new THREE.Vector3().crossVectors(GAL_POLE, GAL_CENTER).normalize(); // l=90
+  // MW_STRENGTH — overall Milky Way brightness, the single knob to tune.
+  const MW_STRENGTH = 1.6;
+  const MW_CAP = 0.24;        // max luminance of the band (hue-preserving cap)
+  const MW_CONTRAST = 1.12;   // >1: brighter core, darker rift lanes, dark sky outside
+  const MW_FEATHER = 0.035;   // soft knee: band haze fades into black sky over this luminance range (no visible 'tint' edge)
+  const MW_HFADE_DEG = 8;     // band dims to 0 over the lowest N degrees of elevation (reads as distant, not planted)
+  const DUST_COUNT = 40000;   // procedural faint 'star dust' (NOT catalog stars; stars.json untouched). 0 = off
+  const DUST_GAIN = 0.95;      // star-dust brightness (was 1.0; smaller crisper sprites read dimmer on-axis)
+  const DUST_SIZE = 0.8;      // star-dust point size before STAR_ROUND_SCALE/MIN (was 1.0 -> 3 px; now 2.2 px)
+  // M31 (Andromeda) — the lens-shaped oval off the band, upper-right of the forward view. It is the
+  // REAL galaxy (protected in tools/prep-milkyway.py), drawn ~2.5 deg long, brighter than to the eye.
+  // MW_M31_DIM < 1 dims just that patch of the photo (e.g. 0.5). 1.0 = off (as photographed).
+  const MW_M31_DIM = 1.0;
+  const M31_L = 117.7, M31_B = -24.0;  // where the eso0932a photo has M31 (~3.5 deg off nominal 121.2,-21.6)
+  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-6k-up.jpg?v=up1').catch(() => null);
+  if (mwTex) {
+    mwTex.colorSpace = THREE.SRGBColorSpace;
+    // mipmaps ON (mw-polish): without a mip chain the 4K photo is minified 2-5x at the edges of the
+    // Quest view and its residual star grain sparkles as the head moves. +1/3 memory: 32 -> ~43 MiB.
+    // The l=180 atan wrap seam is avoided with textureGrad + wrap-safe derivatives in the shader.
+    mwTex.generateMipmaps = true;
+    mwTex.minFilter = THREE.LinearMipmapLinearFilter;
+    mwTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    mwTex.wrapS = THREE.RepeatWrapping;
+    const mat = new THREE.ShaderMaterial({
+      defines: { MW_HFADE_DEG: MW_HFADE_DEG.toFixed(2), MW_STRENGTH: MW_STRENGTH.toFixed(3), MW_CAP: MW_CAP.toFixed(3), MW_CONTRAST: MW_CONTRAST.toFixed(3), MW_FEATHER: MW_FEATHER.toFixed(4) },
+      uniforms: { uMap: { value: mwTex }, uPole: { value: GAL_POLE }, uCenter: { value: GAL_CENTER }, uGy: { value: GAL_Y },
+        uM31: { value: new THREE.Vector3().copy(GAL_CENTER).multiplyScalar(Math.cos(M31_B * Math.PI / 180) * Math.cos(M31_L * Math.PI / 180))
+          .addScaledVector(GAL_Y, Math.cos(M31_B * Math.PI / 180) * Math.sin(M31_L * Math.PI / 180)).addScaledVector(GAL_POLE, Math.sin(M31_B * Math.PI / 180)) },
+        uM31Dim: { value: MW_M31_DIM } },
+      side: THREE.BackSide, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: `
+        varying vec3 vDir;
+        void main() {
+          vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        varying vec3 vDir;
+        uniform sampler2D uMap;
+        uniform vec3 uPole, uCenter, uGy, uM31;
+        uniform float uM31Dim;
+        void main() {
+          vec3 d = normalize(vDir);
+          float l = atan(dot(d, uGy), dot(d, uCenter));          // galactic longitude
+          float b = asin(clamp(dot(d, uPole), -1.0, 1.0));       // galactic latitude
+          vec2 uv = vec2(0.5 - l / 6.2831853, 0.5 + b / 3.1415927);
+          // wrap-safe derivatives: u jumps 1->0 at l=180; take the smaller of du and d(fract(u+.5))
+          vec2 dx = dFdx(uv), dy = dFdy(uv);
+          vec2 uw = vec2(fract(uv.x + 0.5), uv.y);
+          vec2 dx2 = dFdx(uw), dy2 = dFdy(uw);
+          if (abs(dx2.x) < abs(dx.x)) dx.x = dx2.x;
+          if (abs(dy2.x) < abs(dy.x)) dy.x = dy2.x;
+          vec3 c = textureGrad(uMap, uv, dx, dy).rgb;             // linear (sRGB decoded), mipmapped
+          c *= mix(1.0, uM31Dim, smoothstep(cos(radians(3.0)), cos(radians(1.5)), dot(d, uM31)));
+          float Y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+          float Yc = pow(max(Y - 0.004, 0.0), MW_CONTRAST) * 1.6;   // contrast on luminance only (keeps hue)
+          Yc *= smoothstep(0.004, 0.004 + MW_FEATHER, Y);           // feathered edge of the haze
+          vec3 color = c * (Yc / max(Y, 1e-5)) * MW_STRENGTH;
+          float Ym = dot(color, vec3(0.2126, 0.7152, 0.0722));
+          color *= min(1.0, MW_CAP / max(Ym, 1e-5));             // hue-preserving brightness cap
+          // horizon: no atmosphere, but a band at full brightness right down to the ice reads as
+          // 'touching the ground'. Dim it gently over the lowest MW_HFADE_DEG of elevation.
+          float horizon = smoothstep(0.0, sin(radians(MW_HFADE_DEG)), d.y);
+          horizon *= horizon;
+          // dither: breaks up 8-bit banding / residual texel grid
+          float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+          color *= 1.0 + (n - 0.5) * 0.06;                        // multiplicative, so dark sky stays black
+          gl_FragColor = vec4(color * horizon, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`
+    });
+    const band = new THREE.Mesh(new THREE.SphereGeometry(1500, 64, 32), mat);
+    band.renderOrder = SKY_ORDER.milkyWay;
+    skyRig.add(band);
+
+    // Star dust — DUST_COUNT faint tiny points, density + brightness following the photo's band
+    // (rejection-sampled against the texture's luminance). One extra draw call, ~1 MB. Grain the
+    // 4K photo can't give at Quest pixel density. Separate from the Hipparcos catalog.
+    if (DUST_COUNT > 0 && mwTex.image) {
+      const img = mwTex.image, cw = 2048, ch = 1024;
+      const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+      const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, cw, ch);
+      const px = cx.getImageData(0, 0, cw, ch).data;
+      const lum = i => (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+      let rnd = 12345; const R = () => ((rnd = (rnd * 1664525 + 1013904223) >>> 0) / 4294967296);
+      const pos = new Float32Array(DUST_COUNT * 3), col = new Float32Array(DUST_COUNT * 3), siz = new Float32Array(DUST_COUNT);
+      const DR = 1450, v = new THREE.Vector3();
+      let n = 0, guard = 0, m2 = 0;
+      while (n < DUST_COUNT && guard++ < DUST_COUNT * 60) {
+        const u = R(), z = R() * 2 - 1;                       // uniform on sphere in galactic frame
+        const l = (0.5 - u) * Math.PI * 2, b = Math.asin(z);
+        const ix = Math.min(cw - 1, (u * cw) | 0), iy = Math.min(ch - 1, ((0.5 - b / Math.PI) * ch) | 0);
+        const k = (iy * cw + ix) * 4, Y = lum(k);
+        const p = Math.min(1, Math.pow(Y / 0.45, 1.6) + 0.015); // mostly in the band, a few everywhere
+        if (R() > p) continue;
+        v.copy(GAL_CENTER).multiplyScalar(Math.cos(b) * Math.cos(l))
+          .addScaledVector(GAL_Y, Math.cos(b) * Math.sin(l)).addScaledVector(GAL_POLE, Math.sin(b));
+        if (v.y < 0.0) continue;                                // never below the horizon
+        const hz = Math.min(1, v.y / Math.sin(MW_HFADE_DEG * Math.PI / 180));
+        const m = (0.10 + 0.35 * Math.pow(R(), 3) + 0.25 * Math.min(1, Y / 0.4)) * DUST_GAIN * hz * hz;
+        pos.set([v.x * DR, v.y * DR, v.z * DR], n * 3);
+        const w = 0.85 + 0.15 * R();
+        const big = Math.pow(R(), 5);                          // a few bright, larger dots; many dim, small ones
+        siz[n] = 0.75 + 1.1 * big; m2 = m * (0.45 + 2.6 * big);
+        col.set([m2 * (px[k] / 255 * 0.5 + 0.5), m2 * (px[k + 1] / 255 * 0.5 + 0.5) * w, m2 * (px[k + 2] / 255 * 0.5 + 0.5) * w * w], n * 3);
+        n++;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, n * 3), 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, n * 3), 3));
+      g.setAttribute('aSize', new THREE.BufferAttribute(siz.subarray(0, n), 1));
+      const dust = new THREE.Points(g, roundStarMaterial(DUST_SIZE, false, DUST_EDGE_POW, true));   // round soft sprites too (no 1px squares)
+      dust.renderOrder = SKY_ORDER.starDust; dust.frustumCulled = false;
+      skyRig.add(dust);
+    }
+  }
+}
+
+// Jupiter — tidally locked: it NEVER moves. Fixed to the sky rig, ~12 deg across.
+// Texture: NASA/JPL-Caltech/SwRI/MSSS, JunoCam PIA21384 (public domain).
+const jupiterMesh = (await new THREE.TextureLoader().loadAsync('./assets/jupiter-hi.jpg')
+  .catch(() => null));
+let jupiter;
+if (jupiterMesh) {
+  jupiterMesh.colorSpace = THREE.SRGBColorSpace;
+  jupiter = new THREE.Mesh(
+    new THREE.SphereGeometry(JUPITER_RADIUS, 64, 48),
+    new THREE.MeshBasicMaterial({ map: jupiterMesh })
+  );
+  jupiter.position.copy(jupiterDir).multiplyScalar(JUPITER_DISTANCE);
+  skyRig.add(jupiter);
+}
+
+// Visible sun disc — small, warm yellow-white, with a faint soft halo so it reads as a sun, not a flat
+// white dot. Same philosophy as the galaxy: small and subtle. One extra sprite (one draw call, 64px texture).
+{
+  const SUN_COLOR = new THREE.Color().setRGB(1.0, 0.92, 0.72, THREE.SRGBColorSpace);  // soft warm yellow-white (disc, display value)
+  const SUN_GLOW_COLOR = new THREE.Color().setRGB(1.0, 0.85, 0.6, THREE.SRGBColorSpace);
+  const SUN_GLOW_SCALE = 4.5;     // halo diameter in disc diameters (disc ~0.7 deg -> halo ~3 deg)
+  const SUN_GLOW_OPACITY = 0.5;   // halo peak intensity (additive); 0 = off
+  const SUN_R = 9, SUN_D = 1500;  // disc radius / distance (~0.69 deg across, unchanged)
+  const sunDisc = new THREE.Mesh(
+    new THREE.SphereGeometry(SUN_R, 16, 16),
+    new THREE.MeshBasicMaterial({ color: SUN_COLOR, toneMapped: false })   // not tone mapped: ACES would push it back to white
+  );
+  sunDisc.position.copy(SUN_DIR).multiplyScalar(SUN_D);
+  skyRig.add(sunDisc);
+  // halo: radial gradient starting at the disc's rim (empty inside, so it never adds onto the disc and clips it
+  // to white), falling to exactly 0 at the sprite edge (no hard rim)
+  const g0 = 1 / SUN_GLOW_SCALE;   // disc radius as a fraction of the halo radius
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+  const cx = cv.getContext('2d'), gr = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0.0, 'rgba(255,255,255,0)'); gr.addColorStop(g0 * 0.9, 'rgba(255,255,255,0)');
+  gr.addColorStop(g0 * 1.05, 'rgba(255,255,255,0.6)'); gr.addColorStop(0.4, 'rgba(255,255,255,0.14)');
+  gr.addColorStop(0.7, 'rgba(255,255,255,0.03)'); gr.addColorStop(1.0, 'rgba(255,255,255,0)');
+  cx.fillStyle = gr; cx.fillRect(0, 0, 64, 64);
+  const glowTex = new THREE.CanvasTexture(cv); glowTex.colorSpace = THREE.SRGBColorSpace;
+  // horizon-aware: fades out over the lowest MW_HFADE_DEG-ish 8 deg like the band (sun is ~25 deg up today)
+  const hz = Math.min(1, Math.max(0, SUN_DIR.y / Math.sin(8 * Math.PI / 180)));
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: SUN_GLOW_COLOR,
+    opacity: SUN_GLOW_OPACITY * hz * hz, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+  glow.scale.setScalar(SUN_R * 2 * SUN_GLOW_SCALE);
+  glow.position.copy(SUN_DIR).multiplyScalar(SUN_D - 20);
+  glow.renderOrder = SKY_ORDER.milkyWay + 1; glow.frustumCulled = false;
+  skyRig.add(glow);
+}
+
+/* ---------------------------------------------------------- procedural ice texture */
+function makeIceTextures(size = 1024) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const bv = document.createElement('canvas'); bv.width = bv.height = size;
+  const x = cv.getContext('2d'), b = bv.getContext('2d');
+
+  const g = x.createLinearGradient(0, 0, 0, size);
+  g.addColorStop(0, '#e8f0f7'); g.addColorStop(0.5, '#cfdde9'); g.addColorStop(1, '#bccfdd');
+  x.fillStyle = g; x.fillRect(0, 0, size, size);
+  b.fillStyle = '#808080'; b.fillRect(0, 0, size, size);
+
+  // soft blotches
+  for (let i = 0; i < 260; i++) {
+    const r = 20 + Math.random() * 90;
+    x.fillStyle = `rgba(${200 + Math.random() * 55 | 0},${215 + Math.random() * 40 | 0},${230 + Math.random() * 25 | 0},0.08)`;
+    x.beginPath(); x.ellipse(Math.random() * size, Math.random() * size, r, r * (0.4 + Math.random() * 0.6), Math.random() * 3, 0, 7); x.fill();
+  }
+  // cracks — dark in color, recessed in bump
+  for (let i = 0; i < 46; i++) {
+    let px = Math.random() * size, py = Math.random() * size, a = Math.random() * Math.PI * 2;
+    const steps = 24 + Math.random() * 40 | 0, w = 1 + Math.random() * 2.5;
+    for (const [ctx, style, lw] of [[x, 'rgba(38,64,92,0.55)', w], [b, 'rgba(30,30,30,0.8)', w * 1.4]]) {
+      ctx.strokeStyle = style; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(px, py);
+      let qx = px, qy = py, qa = a;
+      for (let s = 0; s < steps; s++) {
+        qa += (Math.random() - 0.5) * 0.9;
+        const len = 8 + Math.random() * 22;
+        qx += Math.cos(qa) * len; qy += Math.sin(qa) * len;
+        ctx.lineTo(qx, qy);
+      }
+      ctx.stroke();
+    }
+    // faint bright lip beside some cracks
+    if (Math.random() < 0.5) {
+      x.strokeStyle = 'rgba(255,255,255,0.25)'; x.lineWidth = w * 0.7;
+      x.beginPath(); x.moveTo(px + 3, py + 3); x.lineTo(px + 60, py + 40); x.stroke();
+    }
+  }
+  // speckle
+  for (let i = 0; i < 2600; i++) {
+    x.fillStyle = `rgba(255,255,255,${Math.random() * 0.10})`;
+    x.fillRect(Math.random() * size, Math.random() * size, 1.6, 1.6);
+  }
+  const map = new THREE.CanvasTexture(cv);
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const bump = new THREE.CanvasTexture(bv);
+  bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+  return { map, bump };
+}
+// [KAI] Production path: replace with generated 4K/8K ice textures -> KTX2 (Basis).
+// The KTX2 pipeline already in the Europa build transcodes to BC7 on desktop.
+const ice = makeIceTextures(1024);
+const groundMat = new THREE.MeshStandardMaterial({
+  map: ice.map, bumpMap: ice.bump, bumpScale: 0.6,
+  roughness: 0.5, metalness: 0.02, color: 0xf2f6fa
+});
+ice.map.repeat.set(90, 90); ice.bump.repeat.set(90, 90);
+
+/* ---------------------------------------------------------- shared ground */
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1400, 1400), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* ---------------------------------------------------------- location system */
+// [KAI] This is the per-teleport load/dispose architecture from the plan.
+// Each location owns an asset group; only the active one is resident.
+// Shared: ground, sky, lights. Per-location: features + high-res textures.
+/* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
+ * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
+const BUILD = 'Build Nov 2 r11f Fissure sides back to r9';
+{ const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
+const SCENE_VER = {
+  'open-ice': 'v9 soft rear blend',
+  crevasse: 'v3 clean horizon',
+  ridge: 'v8 static haze, one texture',
+  chaos: 'v3 Imagine, soft seams',
+  fissure: 'v7 sides back to r9, front v6',
+  cavern: 'v1 jellies'
+};
+const locationGroups = new Map();
+let activeLocation = null;
+
+function registerLocation(def) {
+  const group = new THREE.Group();
+  def.build(group);
+  group.visible = false;
+  scene.add(group);
+  locationGroups.set(def.id, { def, group, loaded: false });
+  group.traverse(o => { if (o.isMesh && !o.material.isShaderMaterial) { o.castShadow = true; o.receiveShadow = true; } });
+}
+
+/* --- art-directed vistas (art by Mars) ---
+ * Each painted spot shows one or more flat 16:9 stills on curved cylinder
+ * segments centred on the player's eye, so each image's horizon row sits at eye
+ * height. Unlit, not tone mapped, drawn after ground + sky (depthTest off).
+ *
+ * HOW TO ADD A PICTURE to a spot: drop the JPG in surface/assets/vistas/ named
+ * <spot>-<view>.jpg (e.g. crevasse-front.jpg, crevasse-left.jpg, crevasse-right.jpg,
+ * crevasse-back.jpg) and add an entry to that spot's `vistas: [...]` list:
+ *   { url, yawDeg, arcDeg, horizon, keySky/keyLo/keyHi/keyBand, topFade, sideFade, bright, order }
+ *   yawDeg   where the picture's centre faces: 0 = spawn forward, -75 = left, +75 = right, 180 = back
+ *   arcDeg   how wide it wraps (90-116); neighbours should overlap ~30-40 deg
+ *   horizon  horizon row as a fraction DOWN from the image top (must match across a spot's pictures)
+ *   keySky   key out the dark painted sky so the real stars show; keyBand = [v0,v1] uv rows where keying starts
+ *   sideFade soft left/right edge width (uv, default 0.16), or [left, right]: the panel ON TOP
+ *            in an overlap fades wide (~0.16-0.22), the one underneath stays nearly hard (~0.04)
+ *   bright/tint  exposure and [r,g,b] multiplier (linear) to match neighbours at the overlaps
+ *   order    draw priority: higher draws on top in overlaps (front 12, sides 11, back 10)
+ * All pictures of the active spot load behind the teleport fade and are disposed
+ * on leave. Quest budget: one 4096x2304 front (~50 MB w/ mips) + side/back at
+ * 2048x1152 (~12.5 MB) or 3072x1728 (~28 MB). A single-picture spot is just a
+ * one-element list. */
+const EYE = PLAYER_HEIGHT;
+const vistaLoader = new THREE.TextureLoader();
+function addVista(group, def, opt) {
+  if (opt.vistas) { for (const v of opt.vistas) addVista(group, def, { ...opt, vistas: null, ...v }); return; }
+  const R = opt.radius || 300, arc = THREE.MathUtils.degToRad(opt.arcDeg || 104);
+  const H = R * arc * 9 / 16;
+  const geo = new THREE.CylinderGeometry(R, R, H, 72, 1, true, Math.PI - arc / 2, arc);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: null }, uBright: { value: opt.bright ?? 1.0 },
+      uKey: { value: opt.keySky ? 1.0 : 0.0 }, uKeyLo: { value: opt.keyLo ?? 0.16 }, uKeyHi: { value: opt.keyHi ?? 0.24 },
+      uTopFade: { value: opt.topFade ?? 0.0 }, uBot: { value: Math.max(opt.bottomFade ?? 0.16, 0.001) },   // bottomFade: soft bottom edge over the procedural ground (0.16 default)
+      uBevel: { value: new THREE.Vector3(opt.bevelW ?? 0, opt.bevelY ?? 1, opt.bevelEdge ?? 0) },   // z: 0 = crop edges (or both edges), 1 = image-left edge only, 2 = image-right edge only
+      uEdgeGain: { value: new THREE.Vector3(...(opt.edgeGain || [1, 1, 0.01])) },   // r10: brightness ramp toward the image's left/right edge (match a darker panel to its neighbours)
+      uBevelRef: { value: new THREE.Vector2(...(opt.bevelRef || [-9, -9])) },   // r10: measure the bevel from these uv x positions instead of the crop edges (lets a panel extend under its neighbour's fade without changing the crag silhouette)
+      uFadeY: { value: opt.fadeBelowY ?? 3.0 },
+      uBevelDummy: { value: 0 },   // crumbly slope that lowers a tall wall's top toward its crop edge (no square corner)
+      uCrop: { value: new THREE.Vector2(opt.cropL ?? 0, opt.cropR ?? 0) },   // hard-cut this fraction of the panel off each side (no overlap with the neighbour)
+      uSide: { value: new THREE.Vector2(...[].concat(opt.sideFade ?? 0.16, opt.sideFade ?? 0.16).slice(0, 2)) },
+      uTint: { value: new THREE.Vector3(...(opt.tint || [1, 1, 1])) },
+      uKeyBand: { value: new THREE.Vector2(...(opt.keyBand || [0.45, 0.62])) }
+    },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = vec2(1.0 - uv.x, uv.y);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      varying vec2 vUv;
+      uniform sampler2D uMap; uniform float uBright, uKey, uKeyLo, uKeyHi, uTopFade, uBot; uniform vec2 uKeyBand, uSide, uCrop; uniform vec3 uBevel, uTint, uEdgeGain; uniform vec2 uBevelRef; uniform float uFadeY;
+      float bh(float x){ return fract(sin(x * 12.9898) * 43758.5453); }
+      void main() {
+        vec4 t = texture2D(uMap, vUv);
+        float eSide = smoothstep(0.0, uSide.x, vUv.x) * smoothstep(1.0, 1.0 - uSide.y, vUv.x);   // side edges [left,right]
+        eSide = mix(eSide, 1.0, smoothstep(uFadeY - 0.03, uFadeY + 0.05, vUv.y));                 // r10: above uFadeY the side fade is off, so a crossfade never shows as a ghost wedge against the sky
+        float a = eSide
+                * smoothstep(0.0, uBot, vUv.y);                                   // bottom edge (soft, over procedural ground)
+        a *= step(uCrop.x, vUv.x) * step(vUv.x, 1.0 - uCrop.y);
+        if (uBevel.x > 0.0) {
+          float de = 9.0;
+          if (uCrop.x > 0.0) de = min(de, vUv.x - uCrop.x);
+          if (uCrop.y > 0.0) de = min(de, 1.0 - uCrop.y - vUv.x);
+          if (uCrop.x <= 0.0 && uCrop.y <= 0.0) de = min(vUv.x, 1.0 - vUv.x);
+          if (uBevelRef.x > -5.0) de = min(vUv.x - uBevelRef.x, uBevelRef.y - vUv.x);
+          if (uBevel.z > 0.5 && uBevel.z < 1.5) de = vUv.x;
+          if (uBevel.z > 1.5) de = 1.0 - vUv.x;
+          float ymax = mix(uBevel.y, 2.0, smoothstep(0.0, uBevel.x, de));
+          ymax += (bh(floor(de * 40.0)) - 0.5) * 0.03 * smoothstep(0.0, 0.03, de) + (bh(floor(de * 120.0) + 11.0) - 0.5) * 0.006;   // r10: calmer crumbly steps (the fine jitter read as flakes at the rim)
+          a *= 1.0 - smoothstep(ymax - 0.003, ymax + 0.003, vUv.y);
+        }
+        if (uTopFade > 0.0) a *= smoothstep(1.0, 1.0 - uTopFade, vUv.y);         // top into sky
+        if (uKey > 0.5) {                                                         // key the dark sky slot
+          float l = dot(t.rgb /* linear */, vec3(0.299, 0.587, 0.114));
+          // key on a slightly blurred (mip-biased) sample so isolated grain in the
+          // painted sky doesn't survive as dark specks over the Milky Way
+          float lb = dot(texture2D(uMap, vUv, 2.0).rgb, vec3(0.299, 0.587, 0.114));
+          float k = smoothstep(uKeyLo, uKeyHi, l) * smoothstep(uKeyLo * 0.6, uKeyHi * 0.8, lb);
+          a *= mix(1.0, k, smoothstep(uKeyBand.x, uKeyBand.y, vUv.y));                        // only the top of the frame
+        }
+        float eg = mix(uEdgeGain.x, 1.0, smoothstep(0.0, uEdgeGain.z, vUv.x)) * mix(uEdgeGain.y, 1.0, smoothstep(0.0, uEdgeGain.z, 1.0 - vUv.x));
+        gl_FragColor = vec4(t.rgb * uBright * uTint * eg, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  // horizon row (fraction down from the top) at eye height
+  // cylinder centre is H/2 below its top; image top is horizon*H above the eye
+  mesh.position.set(def.pos.x, (def.playerY || 0) + EYE + opt.horizon * H - H / 2, def.pos.z);
+  mesh.rotation.y = -THREE.MathUtils.degToRad(opt.yawDeg || 0);  // + yaw = to the right
+  mesh.renderOrder = opt.order ?? 10; mesh.visible = false; mesh.frustumCulled = false;
+  mesh.userData.vista = { url: opt.url, tex: null };
+  group.add(mesh); (group.userData.vistas ||= []).push(mesh);
+}
+
+/* methane haze: a slow wind-driven veil of brushed streaks that sweeps across a join between painted panels,
+ * so a soft transition reads as weather over the terrain instead of a seam. Pure shader, no texture. */
+const hazeMats = [];
+function addHaze(group, def, o) {
+  const R = o.radius || 280, arc = THREE.MathUtils.degToRad(o.arcDeg || 60);
+  const yTop = o.top ?? 18, yBot = o.bottom ?? -170;               // vertical band in metres at radius R, relative to the eye
+  const geo = new THREE.CylinderGeometry(R, R, yTop - yBot, 48, 1, true, Math.PI - arc / 2, arc);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uAlpha: { value: o.alpha ?? 0.42 }, uCol: { value: new THREE.Vector3(...(o.color || [0.80, 0.88, 1.0])) },
+                uSpeed: { value: o.speed ?? 0.018 }, uStretch: { value: o.stretch ?? 7.0 }, uHorizon: { value: o.horizonV ?? 0.88 } },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = vec2(1.0 - uv.x, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      varying vec2 vUv; uniform float uTime, uAlpha, uSpeed, uStretch, uHorizon; uniform vec3 uCol;
+      float h(vec2 p){ vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }   // sin-free hash: stable on mobile GPUs
+      float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*f*(f*(f*6.0-15.0)+10.0);
+        return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+      float fbm(vec2 p){ float a = 0.5, s = 0.0; mat2 r = mat2(0.8, -0.6, 0.6, 0.8); for(int i=0;i<4;i++){ s += a*n(p); p = r*p*2.03 + 7.1; a *= 0.5; } return s; }
+      void main() {
+        // streaks: noise stretched along the wind (horizontal), drifting, with a second slower layer moving a little faster/slower for shear
+        vec2 w = vec2(n(vUv * vec2(3.0, 5.0)), n(vUv * vec2(4.0, 3.0) + 9.0)) - 0.5;   // domain warp so the cells never line up as squares
+        vec2 p1 = vec2(vUv.x * 5.0 + w.x * 1.6, vUv.y * uStretch + w.y * 2.0);
+        vec2 p2 = vec2(vUv.x * 9.0 + 3.7 - w.y * 2.0, vUv.y * uStretch * 1.7 + 1.3 + w.x * 2.0);
+        float d = fbm(p1) * 0.65 + fbm(p2) * 0.35;
+        float streak = smoothstep(0.30, 0.90, d);
+        // brushed edge: the veil thins into streaks along its rim rather than a smooth fade
+        float env = smoothstep(0.0, 0.28, vUv.x) * smoothstep(1.0, 0.72, vUv.x);
+        float rim = mix(1.0, streak, 1.0 - env);
+        // vertical profile: densest low over the ground near the horizon, thinning upward into the sky
+        float below = smoothstep(uHorizon + 0.10, uHorizon - 0.06, vUv.y);      // fades out above the horizon
+        float low = smoothstep(0.0, 0.18, vUv.y);                               // and out at the very bottom
+        float a = uAlpha * env * rim * streak * below * low;
+        gl_FragColor = vec4(uCol, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(def.pos.x, (def.playerY || 0) + EYE + (yTop + yBot) / 2, def.pos.z);
+  m.rotation.y = -THREE.MathUtils.degToRad(o.yawDeg || 0);
+  m.renderOrder = 14; m.frustumCulled = false;
+  // static on purpose: no drift, so it never reads as a rotating carousel
+  group.add(m);
+}
+async function loadPanel(m) {
+  if (!m.userData.vista.tex) {
+    const t = await vistaLoader.loadAsync(m.userData.vista.url).catch(e => { console.warn('[europa] vista missing', e); return null; });
+    if (!t) return;
+    t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    renderer.initTexture(t);   // upload (and mip) now, behind the fade, not on the first visible frame
+    m.userData.vista.tex = t;
+  }
+  m.material.uniforms.uMap.value = m.userData.vista.tex; m.visible = true;
+}
+async function loadVista(entry) {   // all panels of the spot, in parallel, behind the fade
+  const ms = entry.group.userData.vistas || []; if (!ms.length) return;
+  const t0 = performance.now();
+  await Promise.all(ms.map(loadPanel));
+  console.info(`[europa] ${entry.def.id}: ${ms.length} vista panel(s) ready in ${Math.round(performance.now() - t0)} ms`);
+}
+function disposeVista(entry) {
+  for (const m of entry.group.userData.vistas || []) {
+    m.visible = false; m.material.uniforms.uMap.value = null;
+    if (m.userData.vista.tex) { m.userData.vista.tex.dispose(); m.userData.vista.tex = null; }
+  }
+}
+
+/* cave mode: the shared sun, sky, Jupiter and ground plane are switched off; fog + cave lights live in the cavern group */
+let caveMode = false, cavern = null, crackGlow = null;
+function setCaveEnvironment(on) {
+  caveMode = on;
+  skyRig.visible = !on; ground.visible = !on; sun.visible = !on; jupiterShine.visible = !on; hemi.visible = !on;
+  scene.fog = on ? new THREE.FogExp2(0x010811, 0.02) : null;
+  scene.background.setHex(on ? 0x010811 : 0x000000);
+  if (crackGlow) crackGlow.visible = !on;
+  discs.forEach(d => { d.visible = on ? d.userData.locationId === 'cavern' : true; });
+}
+
+let vrUi = null;   // in-headset label + scene menu (built further down)
+let loadToken = 0;
+async function loadLocation(id) {
+  if (activeLocation === id) return;
+  const token = ++loadToken;
+  fadeEl.style.opacity = '1';
+  const prev = activeLocation ? locationGroups.get(activeLocation) : null;
+  if (prev) { prev.group.visible = false; disposeVista(prev); }
+  const next = locationGroups.get(id);
+  activeLocation = id;
+  await loadVista(next);
+  if (token !== loadToken) return;
+  const wantCave = id === 'cavern';
+  if (wantCave !== caveMode) {              // sun/sky/Jupiter/ground swap happens under the fade
+    await new Promise(r => setTimeout(r, 200));
+    if (token !== loadToken) return;
+    setCaveEnvironment(wantCave);
+  }
+  next.group.visible = true;
+  next.loaded = true;
+  if (wantCave) cavern.captureReflections(renderer, scene);
+  rig.position.set(next.def.pos.x, next.def.playerY || 0, next.def.pos.z);
+  rig.rotation.y = 0;   // a new scene always starts facing its front picture (undo any snap turns)
+  document.querySelector('#hud .loc').textContent = `${next.def.name} · ${SCENE_VER[id] || ''}`;
+  if (vrUi) vrUi.refresh();
+  document.querySelectorAll('#teleport-ui button').forEach(b =>
+    b.classList.toggle('active', b.dataset.loc === id));
+  setTimeout(() => { if (token === loadToken) fadeEl.style.opacity = '0'; }, 220);
+}
+
+/* soft unlit tint patch over the shared ground, per location (seam blend toward a vista's foreground) */
+function groundTint(group, c, color, R, alpha = 0.7) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uCol: { value: new THREE.Color(color) } }, transparent: true, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec2 vP; uniform vec3 uCol;
+      void main(){ float r = length(vP) / ${R.toFixed(1)}; float a = ${alpha.toFixed(2)} * (1.0 - smoothstep(0.5, 1.0, r));
+        gl_FragColor = vec4(uCol, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(new THREE.CircleGeometry(R, 48), mat);
+  m.rotation.x = -Math.PI / 2; m.position.set(c.x, 0.02, c.z); m.renderOrder = 5;
+  group.add(m);
+}
+
+/* --- location builders --- */
+function pressureRidges(group, count, spread, hMax, center = new THREE.Vector3(), behindOnly = false) {
+  for (let i = 0; i < count; i++) {
+    const w = 6 + Math.random() * 14, d = 2 + Math.random() * 4, h = 1 + Math.random() * hMax;
+    const geo = new THREE.BoxGeometry(w, h, d, 8, 3, 3);
+    const p = geo.attributes.position;
+    for (let v = 0; v < p.count; v++) {
+      p.setY(v, p.getY(v) + (Math.random() - 0.35) * h * 0.5);
+      p.setX(v, p.getX(v) + (Math.random() - 0.5) * 1.2);
+    }
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, groundMat);
+    // behindOnly: keep ridges out of the forward vista cone (z < 0 within ~65 deg of -Z)
+    const a = behindOnly ? (Math.PI * 0.5 - 2.0) + Math.random() * 4.0 : Math.random() * Math.PI * 2;
+    const r = 18 + Math.random() * spread;
+    m.position.set(center.x + Math.cos(a) * r, h * 0.15, center.z + Math.sin(a) * r);
+    m.rotation.y = Math.random() * Math.PI;
+    group.add(m);
+  }
+}
+
+registerLocation({
+  id: 'open-ice', name: 'Canyon', pos: new THREE.Vector3(0, 0, 0),
+  build(group) {
+    // painted surround: front is Mars's original; left, right and back were added to match it.
+    // front on top (wide fades), sides next, back underneath. Dark sky slots are keyed out so the real stars show.
+    const wall = { arcDeg: 116, order: 11, horizon: 0.47, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] };   // sky is baked to pure black in the pictures and rock is floored above it, so only the true sky keys out
+    addVista(group, this, { vistas: [
+      { url: './assets/canyon-vista.jpg?v=7', yawDeg: 0, arcDeg: 116, horizon: 0.47, order: 12, sideFade: 0.003, bevelW: 0.20, bevelY: 0.855, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] },  // sky baked to pure black; dark rock is floored so it can never key out (stars bled through the tall wall before)
+      { ...wall, url: './assets/vistas/canyon-left.jpg?v=7',  yawDeg: -75, sideFade: [0.17, 0.003], fadeBelowY: 0.76, cropR: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 1 },
+      { ...wall, url: './assets/vistas/canyon-right.jpg?v=7', yawDeg: 75,  sideFade: [0.003, 0.17], fadeBelowY: 0.76, cropL: 0.349, bevelW: 0.2, bevelY: 0.80, bevelEdge: 2 },
+      { url: './assets/vistas/canyon-back.jpg?v=7', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.47, sideFade: 0.003, bevelRef: [0.160, 0.840], bevelW: 0.2, bevelY: 0.80, keySky: true, keyLo: 0.0005, keyHi: 0.0015, keyBand: [0.5, 0.55] }
+    ] });
+    groundTint(group, this.pos, 0x737a84, 160, 0.7);
+    // no procedural ridges here any more: the four panels cover 360 deg and ridges poked above the painted horizon
+  }
+});
+
+/* Crevasse Rim surround (Mars): measured horizon rows + sky key per picture */
+const LEFT_H  = { h: 0.212, lo: 0.006, hi: 0.016, band: [0.79, 0.81] };   // crevasse-left (alt): curved wall sweeping from the left foreground, black strip ~20%
+const RIGHT_H = { h: 0.217, lo: 0.006, hi: 0.016, band: [0.76, 0.79] };   // crevasse-right: crevasse receding centre, black strip ~21%
+const SIDE_BRIGHT = 1.6, SIDE_TINT = [1.0, 1.0, 1.0];
+const BACK_BRIGHT = 1.75, BACK_TINT = [1.0, 1.12, 1.3];                   // back reads darker/warmer than the front
+registerLocation({
+  id: 'crevasse', name: 'Crevasse Rim \u2014 Open Lineae', pos: new THREE.Vector3(130, 0, -50),
+  build(group) {
+    // horizon rows measured per picture (brightness jump); every panel's horizon lands at eye height.
+    // front on top (wide fades), sides next (hard toward the front, soft toward the back), back underneath.
+    // back is 140 deg wide (uniformly scaled) so it overlaps each side by ~23 deg instead of 11.
+    const side = { arcDeg: 116, order: 11, keySky: true, bright: SIDE_BRIGHT, tint: SIDE_TINT };
+    addVista(group, this, { vistas: [
+      { url: './assets/vistas/crevasse-front.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.02, topFade: 0.025, sideFade: 0.22, order: 12 },
+      { ...side, url: './assets/vistas/crevasse-left.jpg',  yawDeg: -75, horizon: LEFT_H.h, keyLo: LEFT_H.lo, keyHi: LEFT_H.hi, keyBand: LEFT_H.band, sideFade: [0.16, 0.04] },
+      { ...side, url: './assets/vistas/crevasse-right.jpg', yawDeg: 75,  horizon: RIGHT_H.h, keyLo: RIGHT_H.lo, keyHi: RIGHT_H.hi, keyBand: RIGHT_H.band, sideFade: [0.04, 0.16] },
+      { url: './assets/vistas/crevasse-back.jpg', yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.275, keySky: true, keyLo: 0.012, keyHi: 0.020, keyBand: [0.70, 0.73], sideFade: 0.04, bright: BACK_BRIGHT, tint: BACK_TINT }
+    ] });
+    groundTint(group, this.pos, 0x6c7a8a, 160, 0.7);
+    // no procedural ridges here: the four panels cover 360 deg and ridges poked above the low horizon
+
+  }
+});
+
+registerLocation({
+  id: 'ridge', name: 'Ridge Overlook', pos: new THREE.Vector3(-95, 0, 105), playerY: 1.6,
+  build(group) {
+    // four painted panels cover 360 deg (front 0, right +75, back 180, left -75).
+    // horizon rows measured per picture (first bright row at the image edge, as a fraction down from the top);
+    // front on top, sides next, back underneath; near-hard side edges (0.008) so each panel reads as its own face with a crisp seam. Black painted sky is keyed out so the real stars show.
+    const key = { keySky: true, keyLo: 0.012, keyHi: 0.022 };
+    addVista(group, this, { vistas: [
+      { ...key, url: './assets/vistas/ridge-front.jpg?v=7', yawDeg: 0,   arcDeg: 116, horizon: 0.374, keyBand: [0.63, 0.66], order: 12, sideFade: [0.2, 0.2], bottomFade: 0.02, bright: 0.88 },
+      { ...key, url: './assets/vistas/ridge-right.jpg', yawDeg: 75,  arcDeg: 116, horizon: 0.378, keyBand: [0.63, 0.66], order: 11, sideFade: [0.008, 0.30], bottomFade: 0.02, bright: 0.88, cropL: 0.15 },
+      { ...key, url: './assets/vistas/ridge-left.jpg',  yawDeg: -75, arcDeg: 116, horizon: 0.338, keyBand: [0.65, 0.68], order: 11, sideFade: [0.30, 0.008], bottomFade: 0.02, bright: 1.0, cropR: 0.15 },
+      { ...key, url: './assets/vistas/ridge-back.jpg?v=7',  yawDeg: 180, arcDeg: 172, horizon: 0.374, keyBand: [0.63, 0.66], order: 10, sideFade: 0.008, bottomFade: 0.02, bright: 0.88 }
+    ] });
+    addHaze(group, this, { yawDeg: -46, arcDeg: 56, alpha: 0.7 });
+    addHaze(group, this, { yawDeg: 46, arcDeg: 56, alpha: 0.34 });
+    groundTint(group, this.pos, 0x707888, 160, 0.7);
+    // no procedural ridges: they poked above the painted horizon as small spikes in the headset
+    // overlook platform — a broad flat-topped rise
+    const plat = new THREE.Mesh(new THREE.CylinderGeometry(9, 12, 2.4, 24), groundMat);
+    plat.position.set(-95, 0.4, 105);
+    group.add(plat);
+  }
+});
+
+registerLocation({
+  id: 'chaos', name: 'Chaos Terrain', pos: new THREE.Vector3(-20, 0, -160),
+  build(group) {
+    // painted surround: front is Mars's original; left, right and back were added (shattered ice, same horizon row).
+    // front on top (wide fades), sides next, back underneath. Black painted sky is keyed out so the real stars show.
+    // left/right/back are Scott's Imagine renders (downscaled from 3584 wide); horizon rows measured per picture.
+    const side = { arcDeg: 116, order: 11, keySky: true };
+    addVista(group, this, { vistas: [
+      { url: './assets/chaos-terrain-vista.jpg', yawDeg: 0, arcDeg: 116, horizon: 0.15, order: 12, sideFade: 0.22, keySky: true, keyLo: 0.022, keyHi: 0.034, keyBand: [0.76, 0.84] },
+      { ...side, url: './assets/vistas/chaos-left.jpg',  yawDeg: -75, horizon: 0.17,  keyLo: 0.02, keyHi: 0.035, keyBand: [0.82, 0.85],   sideFade: [0.18, 0.04], bright: 1.2 },
+      { ...side, url: './assets/vistas/chaos-right.jpg', yawDeg: 75,  horizon: 0.325, keyLo: 0.012, keyHi: 0.022, keyBand: [0.665, 0.695], sideFade: [0.04, 0.18], bright: 0.75, tint: [1.05, 0.97, 0.92] },
+      { ...side, url: './assets/vistas/chaos-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, horizon: 0.17,  keyLo: 0.02, keyHi: 0.035, keyBand: [0.82, 0.85],   sideFade: 0.04, bright: 1.2 }   // back = copy of the left picture (Scott's call: the sides look good, the old back had hard seams)
+    ] });
+    groundTint(group, this.pos, 0x767b86, 160, 0.7);
+    // no procedural ridges: the four panels cover 360 deg and ridges poked above the painted horizon
+  }
+});
+
+registerLocation({
+  id: 'fissure', name: 'Fissure Vantage', pos: new THREE.Vector3(160, 0, 110),
+  build(group) {
+    // painted surround: front is Mars's original; left, right and back were added. The back view shows a deep fissure
+    // with a faint glow far below (the cavern's upwelling escaping through a pressure fissure).
+    const side = { arcDeg: 116, order: 11, horizon: 0.125, keySky: true, keyLo: 0.012, keyHi: 0.022, keyBand: [0.84, 0.86] };
+    addVista(group, this, { vistas: [
+      { url: './assets/fissure-vantage-vista.jpg?v=11', yawDeg: 0, arcDeg: 116, horizon: 0.125, order: 12, sideFade: 0.30, keySky: true, keyLo: 0.030, keyHi: 0.050, keyBand: [0.85, 0.89] },
+      { ...side, url: './assets/vistas/fissure-left.jpg?v=r9',  yawDeg: -75, sideFade: [0.30, 0.04], bright: 1.4 },
+      { ...side, url: './assets/vistas/fissure-right.jpg?v=r9', yawDeg: 75,  sideFade: [0.04, 0.30], bright: 0.95 },
+      { ...side, url: './assets/vistas/fissure-back.jpg',  yawDeg: 180, arcDeg: 140, order: 10, sideFade: 0.25, edgeGain: [2.3, 4.0, 0.45], horizon: 0.252, keyBand: [0.738, 0.768] }   // Scott's Imagine render (3072 wide), horizon row measured
+    ] });
+    addHaze(group, this, { yawDeg: -44, arcDeg: 44, alpha: 0.32, top: -26 });   // static haze over the soft joins, so they read as weather
+    addHaze(group, this, { yawDeg: 44, arcDeg: 44, alpha: 0.26, top: -26 });
+    groundTint(group, this.pos, 0x7f8698, 160);   // blend procedural ice toward the still's foreground tone
+    // no procedural ridges: the four panels cover 360 deg
+  }
+});
+
+registerLocation({
+  id: 'cavern', name: 'Ice Cavern', pos: CAVE_SPAWN,
+  discPos: new THREE.Vector3(5.5, 0.06, 3.5),     // [KAI] the cave itself is far off the map; its disc sits near the Canyon entry
+  build(group) { cavern = buildCavern(group); }
+});
+
+/* ---------------------------------------------------------- teleport */
+const discs = [];
+{
+  const discGeo = new THREE.RingGeometry(0.9, 1.25, 40);
+  for (const [id, { def }] of locationGroups) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0x54c8ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+    const disc = new THREE.Mesh(discGeo, mat);
+    disc.rotation.x = -Math.PI / 2;
+    if (def.discPos) disc.position.copy(def.discPos); else disc.position.set(def.pos.x, (def.playerY || 0) + 0.06, def.pos.z + 2.6);
+    disc.userData.locationId = id;
+    scene.add(disc); discs.push(disc);
+  }
+}
+
+{ // faint cyan crack glow beside the cavern disc (visible from the surface only)
+  const dp = locationGroups.get('cavern').def.discPos;
+  crackGlow = makeCrackGlow();
+  crackGlow.position.set(dp.x + 1.2, 0.035, dp.z - 1.9); crackGlow.rotation.z = 1.0;
+  scene.add(crackGlow);
+}
+
+const raycaster = new THREE.Raycaster();
+const fadeEl = document.getElementById('fade');
+function flashFade() {
+  fadeEl.style.opacity = '1';
+  setTimeout(() => fadeEl.style.opacity = '0', 220);
+}
+function tryTeleportFromRay(origin, dir) {
+  raycaster.set(origin, dir);
+  const hit = raycaster.intersectObjects(discs, false)[0];
+  if (hit && hit.object.userData.locationId !== activeLocation) loadLocation(hit.object.userData.locationId);
+  else nextLocation(); // [KAI] far discs are 130m+ away and unaimable; trigger cycles spots
+}
+function nextLocation() {
+  const ids = [...locationGroups.keys()];
+  loadLocation(ids[(ids.indexOf(activeLocation) + 1) % ids.length]);
+}
+
+// XR controllers
+for (let i = 0; i < 2; i++) {
+  const ctl = renderer.xr.getController(i);
+  ctl.addEventListener('selectstart', () => {
+    const m = new THREE.Matrix4().identity().extractRotation(ctl.matrixWorld);
+    const dir = new THREE.Vector3(0, 0, -1).applyMatrix4(m).normalize();
+    const origin = new THREE.Vector3().setFromMatrixPosition(ctl.matrixWorld);
+    if (vrUi && vrUi.handleSelect(origin, dir)) return;   // the scene menu takes the click first
+    tryTeleportFromRay(origin, dir);
+  });
+  // [KAI] visible pointer ray so you can see where you aim
+  const ray = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -4)]),
+    new THREE.LineBasicMaterial({ color: 0x54c8ff, transparent: true, opacity: 0.6 }));
+  ctl.add(ray);
+  rig.add(ctl);
+}
+
+/* ---------------------------------------------------------- helmet rim (suit presence) */
+{
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.62, 0.055, 12, 48, Math.PI * 1.15),
+    new THREE.MeshStandardMaterial({ color: 0x1a222c, roughness: 0.7, metalness: 0.3, transparent: true, opacity: 1 })
+  );
+  rim.renderOrder = 100; // drawn after the vista panel (which ignores depth)
+  rim.position.set(0, -0.12, -0.32);
+  rim.rotation.set(0.15, 0, Math.PI * 0.925); // arc centered at bottom of view
+  camera.add(rim); // camera is already in the scene graph via rig — children render fine
+}
+
+/* ---------------------------------------------------------- in-headset label + scene menu */
+// A small label sits low in view at all times (scene name, its version, the build).
+// Look down (or press A/X) and a scene menu opens: point a controller at a scene and pull the trigger.
+// B/Y jumps to the next scene. The page's HTML buttons can't be seen or pressed inside the headset.
+vrUi = (() => {
+  const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const ids = [...locationGroups.keys()];
+  const COLS = 3, ROWS = Math.ceil(ids.length / COLS);
+  const lab = { c: mk(1024, 150) }, menu = { c: mk(1024, 70 + ROWS * 150) };
+  for (const o of [lab, menu]) {
+    o.tex = new THREE.CanvasTexture(o.c); o.tex.colorSpace = THREE.SRGBColorSpace;
+  }
+  const quad = (o, wMeters, z, y) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(wMeters, wMeters * o.c.height / o.c.width),
+      new THREE.MeshBasicMaterial({ map: o.tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+    m.renderOrder = 300; m.position.set(0, y, z); m.frustumCulled = false; camera.add(m); return m;
+  };
+  lab.mesh = quad(lab, 0.5, -0.8, -0.27);
+  menu.mesh = quad(menu, 0.95, -0.95, -0.52); menu.mesh.visible = false;
+  let pinned = false;
+  const rr = (g, x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+  function draw() {
+    let g = lab.c.getContext('2d'); g.clearRect(0, 0, 1024, 150);
+    rr(g, 8, 8, 1008, 134, 28); g.fillStyle = 'rgba(4,14,24,0.78)'; g.fill(); g.strokeStyle = '#4f8fc0'; g.lineWidth = 3; g.stroke();
+    const d = locationGroups.get(activeLocation)?.def;
+    g.fillStyle = '#ffffff'; g.font = 'bold 54px sans-serif'; g.textAlign = 'center';
+    g.fillText(d ? d.name : '', 512, 70);
+    g.fillStyle = '#9fd8ff'; g.font = '36px sans-serif';
+    g.fillText(`${SCENE_VER[activeLocation] || ''}  ·  ${BUILD}`, 512, 118);
+    lab.tex.needsUpdate = true;
+    g = menu.c.getContext('2d'); g.clearRect(0, 0, 1024, menu.c.height);
+    rr(g, 8, 8, 1008, menu.c.height - 16, 30); g.fillStyle = 'rgba(4,14,24,0.88)'; g.fill(); g.strokeStyle = '#4f8fc0'; g.lineWidth = 3; g.stroke();
+    g.fillStyle = '#9fd8ff'; g.font = '34px sans-serif'; g.textAlign = 'center';
+    g.fillText(`Scenes  ·  ${BUILD}`, 512, 54);
+    ids.forEach((id, i) => {
+      const x = 28 + (i % COLS) * 328, y = 76 + Math.floor(i / COLS) * 150, on = id === activeLocation;
+      rr(g, x, y, 312, 136, 22); g.fillStyle = on ? '#1b4a73' : '#0e2a44'; g.fill(); g.strokeStyle = on ? '#8fd0ff' : '#2f5b85'; g.lineWidth = 3; g.stroke();
+      g.fillStyle = '#fff'; g.font = 'bold 36px sans-serif'; g.fillText(locationGroups.get(id).def.name, x + 156, y + 60, 290);
+      g.fillStyle = '#9fd8ff'; g.font = '28px sans-serif'; g.fillText(SCENE_VER[id] || '', x + 156, y + 106, 290);
+    });
+    menu.tex.needsUpdate = true;
+  }
+  const _o = new THREE.Vector3(), _d = new THREE.Vector3();
+  return {
+    refresh: draw,
+    get open() { return menu.mesh.visible; },
+    handleSelect(origin, dir) {
+      if (!menu.mesh.visible) return false;
+      menu.mesh.updateWorldMatrix(true, false);
+      raycaster.set(origin, dir);
+      const hit = raycaster.intersectObject(menu.mesh, false)[0];
+      if (!hit) return false;
+      const x = hit.uv.x * 1024, y = (1 - hit.uv.y) * menu.c.height;
+      const col = Math.floor((x - 28) / 328), row = Math.floor((y - 76) / 150), i = row * COLS + col;
+      if (col >= 0 && col < COLS && row >= 0 && ids[i]) loadLocation(ids[i]);
+      return true;   // a click on the menu panel never falls through to the cycle-scenes fallback
+    },
+    togglePin() { pinned = !pinned; },
+    update() {
+      camera.getWorldDirection(_d);
+      menu.mesh.visible = renderer.xr.isPresenting && (pinned || _d.y < -0.4);
+      lab.mesh.visible = renderer.xr.isPresenting && !menu.mesh.visible;
+    }
+  };
+})();
+vrUi.refresh();
+const SNAP_TURN_DEG = 30;   // joystick snap-turn step (push the stick left/right once per step); 30 by default, was asked not to be 45
+function snapTurn(deg) {
+  // rotate the rig about the player's head so the view turns in place (no sideways slide)
+  const before = new THREE.Vector3(); camera.getWorldPosition(before);
+  rig.rotation.y += THREE.MathUtils.degToRad(deg);
+  rig.updateMatrixWorld(true);
+  const after = new THREE.Vector3(); camera.getWorldPosition(after);
+  rig.position.x += before.x - after.x; rig.position.z += before.z - after.z;
+  rig.updateMatrixWorld(true);
+}
+window.__snapTurn = snapTurn;
+{ // controller buttons: A/X pins the menu open, B/Y jumps to the next scene
+  const was = new Map();
+  const stickArmed = new Map();   // per controller: true once the stick has returned near centre
+  window.__pollPads = () => {
+    const sess = renderer.xr.getSession && renderer.xr.getSession(); if (!sess) return;
+    for (const src of sess.inputSources) {
+      const gp = src.gamepad; if (!gp) continue;
+      const prev = was.get(src) || [];
+      const press = i => gp.buttons[i] && gp.buttons[i].pressed && !prev[i];
+      if (press(4)) vrUi.togglePin();
+      if (press(5)) nextLocation();
+      const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);   // thumbstick left/right
+      const armed = stickArmed.get(src) !== false;
+      if (armed && Math.abs(sx) > 0.7) { snapTurn(sx > 0 ? -SNAP_TURN_DEG : SNAP_TURN_DEG); stickArmed.set(src, false); }
+      else if (!armed && Math.abs(sx) < 0.3) stickArmed.set(src, true);
+      was.set(src, gp.buttons.map(b => b.pressed));
+    }
+  };
+}
+
+/* ---------------------------------------------------------- desktop fallback + UI */
+let yaw = 0, pitch = 0, dragging = false, px = 0, py = 0;
+const dom = renderer.domElement;
+dom.addEventListener('pointerdown', e => { dragging = true; px = e.clientX; py = e.clientY; });
+window.addEventListener('pointerup', e => {
+  if (dragging && Math.hypot(e.clientX - px, e.clientY - py) < 6) {
+    const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.intersectObjects(discs, false)[0];
+    if (hit) loadLocation(hit.object.userData.locationId);
+  }
+  dragging = false;
+});
+window.addEventListener('pointermove', e => {
+  if (!dragging || renderer.xr.isPresenting) return;
+  yaw -= (e.clientX - px) * 0.0032; pitch -= (e.clientY - py) * 0.0028;
+  pitch = THREE.MathUtils.clamp(pitch, -1.2, 1.2);
+  px = e.clientX; py = e.clientY;
+});
+
+{
+  const ui = document.getElementById('teleport-ui');
+  for (const [id, { def }] of locationGroups) {
+    const b = document.createElement('button');
+    b.textContent = def.name; b.dataset.loc = id;
+    b.onclick = () => loadLocation(id);
+    ui.appendChild(b);
+  }
+}
+
+{
+  const btn = document.getElementById('enter-vr');
+  if ('xr' in navigator) {
+    navigator.xr.isSessionSupported('immersive-vr').then(ok => {
+      if (ok) {
+        btn.disabled = false; btn.textContent = 'Enter VR';
+        btn.onclick = () => document.getElementById('overlay').classList.add('hidden');
+        document.body.appendChild(VRButton.createButton(renderer));
+        document.querySelector('#VRButton').style.display = 'none'; // we use our own button flow
+        const real = document.querySelector('#VRButton');
+        btn.addEventListener('click', () => real.click(), { once: true });
+      } else { btn.textContent = 'VR not available — desktop mode'; }
+    }).catch(() => { btn.textContent = 'VR not available — desktop mode'; });
+  } else { btn.textContent = 'VR not available — desktop mode'; }
+  renderer.xr.addEventListener('sessionstart', () =>
+    document.getElementById('overlay').classList.add('hidden'));
+  renderer.xr.addEventListener('sessionend', () =>
+    document.getElementById('overlay').classList.remove('hidden'));
+}
+
+/* ---------------------------------------------------------- fps meter */
+const fpsEl = document.querySelector('#hud .fps');
+let frames = 0, lastT = performance.now(), ema = 60;
+function tickFps(now) {
+  frames++;
+  const dt = now - lastT;
+  if (dt >= 500) {
+    const fps = frames * 1000 / dt;
+    ema = ema * 0.6 + fps * 0.4;
+    fpsEl.textContent = `${ema.toFixed(0)} fps`;
+    fpsEl.style.color = ema >= 85 ? '#7dffa8' : ema >= 60 ? '#ffd47d' : '#ff8d7d';
+    frames = 0; lastT = now;
+  }
+}
+
+/* ---------------------------------------------------------- main loop */
+const clock = new THREE.Clock();
+await loadLocation('open-ice'); // preloads the spawn vista before the first frame
+let roll = 0;
+window.__surface = { loadLocation, look: (y, p = 0, r = 0) => { yaw = y; pitch = p; roll = r; },
+  head: (x = 0, y = 0, z = 0) => camera.position.set(x, PLAYER_HEIGHT + y, z), get active() { return activeLocation; } };
+
+const _skyPos = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  tickFps(now);
+
+  if (!renderer.xr.isPresenting) {
+    camera.rotation.set(0, 0, 0);
+    camera.rotateY(yaw); camera.rotateX(pitch); if (roll) camera.rotateZ(roll);
+  }
+
+  // sun + shadow frustum follow the player
+  sun.position.copy(rig.position).addScaledVector(SUN_DIR, 160);
+  sun.target.position.copy(rig.position);
+  sun.target.updateMatrixWorld();
+
+  // sky stays glued to the player (fixed stars, motionless Jupiter)
+  // camera-centred (incl. head height/XR head offset) so the sky has zero parallax
+  camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
+
+  if (caveMode && cavern) cavern.update(Math.min(clock.getDelta(), 0.1), now * 0.001);
+  else clock.getDelta();
+  if (crackGlow && crackGlow.visible) crackGlow.material.opacity = crackGlow.userData.base * (0.8 + 0.2 * Math.sin(now * 0.0012));
+
+  if (renderer.xr.isPresenting) { window.__pollPads && window.__pollPads(); }
+  vrUi.update();
+
+  // gentle disc pulse
+  const s = 1 + Math.sin(now * 0.003) * 0.06;
+  discs.forEach(d => d.scale.set(s, s, 1));
+
+  renderer.render(scene, camera);
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
