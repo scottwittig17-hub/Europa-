@@ -193,7 +193,7 @@ for (const o of skyRig.children) if (o.isPoints) o.renderOrder = SKY_ORDER.stars
   // MW_M31_DIM < 1 dims just that patch of the photo (e.g. 0.5). 1.0 = off (as photographed).
   const MW_M31_DIM = 1.0;
   const M31_L = 117.7, M31_B = -24.0;  // where the eso0932a photo has M31 (~3.5 deg off nominal 121.2,-21.6)
-  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-6k.jpg?v=naked1').catch(() => null);
+  const mwTex = await new THREE.TextureLoader().loadAsync('./assets/milkyway-eso0932a-6k-up.jpg?v=up1').catch(() => null);
   if (mwTex) {
     mwTex.colorSpace = THREE.SRGBColorSpace;
     // mipmaps ON (mw-polish): without a mip chain the 4K photo is minified 2-5x at the edges of the
@@ -421,7 +421,7 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Nov 2 r11n naked-eye sky';
+const BUILD = 'Build Nov 2 r11u naked-eye Upscayl sky';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v9 soft rear blend',
