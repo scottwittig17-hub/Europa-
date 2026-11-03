@@ -71,7 +71,7 @@ scene.add(jupiterShine);
 // Total light per star is still conserved (gain below), so smaller = crisper, not dimmer.
 const STAR_ROUND_SCALE = 1.25;  // sprite diameter / old square size (was 1.7)
 const STAR_MIN_PX = 2.2;        // smallest sprite that still reads as a disc (was 3.0)
-const STAR_GLOW_TAIL = 0.18;    // brightest-tier halo strength (was 0.35)
+const STAR_GLOW_TAIL = 0.05;    // brightest-tier halo strength (was 0.18 r11u, 0.35 earlier): Scott r11u headset, two stars too big/bright
 // Peripheral 'film' + shimmer fix: points have a FIXED pixel size, but toward the edge of a wide
 // (Quest ~104-110 deg) rectilinear eye buffer each pixel covers up to ~5x more sky (cos^3 of the
 // off-axis angle), so 40k dust sprites pile up into a grey haze there, which the headset's lens-
@@ -135,7 +135,7 @@ scene.add(skyRig);
 
   if (starData && starData.stars && starData.stars.length) {
     // tiers after Mars's star-sprites branch (60 glow / 360 crisp / rest); positions untouched
-    const STAR_R = 1560, tiers = [{ count: 60, size: 2.8, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    const STAR_R = 1560, tiers = [{ count: 60, size: 2.0, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
     let offset = 0;
     for (const t of tiers) {
       const n = Math.min(t.count, starData.stars.length - offset);
@@ -421,7 +421,7 @@ scene.add(ground);
 // Shared: ground, sky, lights. Per-location: features + high-res textures.
 /* version labels: shown on the desktop HUD and in the headset (look down for the scene menu).
  * Bump BUILD and the scene's entry whenever a scene's pictures or wiring change. */
-const BUILD = 'Build Nov 2 r11u naked-eye Upscayl sky';
+const BUILD = 'Build Nov 2 r11s smaller bright stars';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 const SCENE_VER = {
   'open-ice': 'v9 soft rear blend',
