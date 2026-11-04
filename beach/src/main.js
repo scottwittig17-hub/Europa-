@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-const BUILD = 'Beach b2';
+const BUILD = 'Beach b3';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -91,7 +91,7 @@ const sandMat = new THREE.ShaderMaterial({
       vec3 N = normalize(vec3(-(hx-h0)/e*0.025*fd, 1.0, -(hz-h0)/e*0.025*fd));
       vec3 V = normalize(cameraPosition - vW);
       // swash: the waterline breathes in and out
-      float swell = sin(uTime*0.42)*0.55 + sin(uTime*0.23+1.3)*0.35;
+      float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
       float line = uShore + 1.2 + swell + (fbm(vec2(p.x*0.35, uTime*0.05))-0.5)*1.4;
       float wet = smoothstep(line + 3.5, line - 0.3, p.y);          // z grows toward the beach
       float sheet = smoothstep(line + 0.05, line - 0.6, p.y);        // thin water sheet
@@ -107,13 +107,18 @@ const sandMat = new THREE.ShaderMaterial({
         col += C * pow(max(dot(N,H),0.0), rough) * mix(0.004, 0.08, wet) * (1.0 + sheet*1.5);
         // b2: no glitter. Only a barely-visible fine micro-grain (very low, broad lobe, near the viewer only)
         float gr = h21(floor(p*400.0) + float(i)*31.7);
+        // b3: light scattering of fine mineral glints (~12% of b1), soft, moon-facing only
+        vec2 cell = floor(p*320.0);
+        float rr = h21(cell + float(i)*31.7);
+        vec3 fn = normalize(vec3(h21(cell+3.1)-0.5, 1.4, h21(cell+7.7)-0.5));
+        col += C * pow(max(dot(fn,H),0.0), 120.0) * step(0.99, rr) * 0.18 * fd * (1.0 - wet*0.7);
         col += C * base * 0.25 * (gr - 0.5) * fd * (1.0 - wet);
       }
       col += vec3(0.002,0.0026,0.003);
       // foam line at the swash edge
       float fl = abs(p.y - line);
-      float foam = smoothstep(0.25, 0.0, fl) * smoothstep(0.45, 0.8, fbm(vec2(p.x*1.3, p.y*2.0 - uTime*0.3)));
-      col += foam * (uCA*0.07 + uCB*0.03);
+      float foam = smoothstep(0.45, 0.0, fl) * smoothstep(0.45, 0.8, fbm(vec2(p.x*1.3, p.y*2.0 - uTime*0.3)));
+      col += foam * (uCA*0.09 + uCB*0.045);
       col = mix(col, vec3(0.0), smoothstep(80.0, 400.0, d));
       gl_FragColor = vec4(col, 1.0);
       #include <tonemapping_fragment>
@@ -138,9 +143,9 @@ const waterMat = new THREE.ShaderMaterial({
     vec2 wgrad(vec2 p, float t){
       vec2 g = vec2(0.0);
       // a few directional swells + noise chop
-      vec4 dirs[4]; dirs[0]=vec4(0.10,1.0,0.55,0.9); dirs[1]=vec4(-0.35,1.0,1.1,1.3); dirs[2]=vec4(0.6,1.0,2.3,1.9); dirs[3]=vec4(-0.8,0.6,4.1,2.6);
+      vec4 dirs[4]; dirs[0]=vec4(0.10,1.0,0.45,0.7); dirs[1]=vec4(-0.35,1.0,0.95,1.0); dirs[2]=vec4(0.6,1.0,2.3,1.9); dirs[3]=vec4(-0.8,0.6,4.1,2.6);
       for(int i=0;i<4;i++){ vec2 d = normalize(dirs[i].xy); float k = dirs[i].z; float ph = dot(p,d)*k + t*dirs[i].w;
-        g += d * cos(ph) * (0.10 / k) * (i<2 ? 1.0 : 0.35); }
+        g += d * cos(ph) * (0.10 / k) * (i<2 ? 1.4 : 0.35); }
       float e = 0.15; vec2 q = p*1.3 + vec2(0.0, t*0.25);
       float n0 = fbm(q); g += vec2(fbm(q+vec2(e,0))-n0, fbm(q+vec2(0,e))-n0)/e * 0.012;
       return g;
@@ -160,9 +165,16 @@ const waterMat = new THREE.ShaderMaterial({
         col += C * (pow(c, 160.0/sz)*0.9 + pow(c, 40.0/sz)*0.35 + pow(c, 10.0)*0.02) * (0.4 + fres*1.5);
       }
       // shallow edge: fade into the wet sand, faint foam
-      float swell = sin(uTime*0.42)*0.55 + sin(uTime*0.23+1.3)*0.35;
+      float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
       float line = uShore + 1.2 + swell + (fbm(vec2(vW.x*0.35, uTime*0.05))-0.5)*1.4;
       float a = smoothstep(line - 0.2, line - 1.8, vW.z);
+      // b3: a soft rolling surf crest that travels in toward the beach and dissolves at the swash
+      float ph = fract(uTime*0.054);
+      float cz = line - 9.0 + ph*8.5;
+      float band = exp(-pow((vW.z - cz)/0.7, 2.0)) * smoothstep(0.0, 0.25, ph) * (1.0 - smoothstep(0.75, 1.0, ph));
+      float fn2 = smoothstep(0.35, 0.75, fbm(vec2(vW.x*0.9, vW.z*1.6 - uTime*0.4)));
+      col += band * (0.35 + 0.65*fn2) * (uCA*0.05 + uCB*0.03) * (1.0 - smoothstep(150.0, 900.0, d));
+      col += band * (uCA*0.012 + uCB*0.008);  // crest catches both moons softly
       float hz = smoothstep(150.0, 900.0, d);
       col = mix(col, vec3(0.0), hz*0.9);
       gl_FragColor = vec4(col, a);
@@ -239,39 +251,54 @@ function makeMoon(M, seed, phaseDir) {
 makeMoon(MOON_A, 1.3, new THREE.Vector2(0.25, 0.15));
 makeMoon(MOON_B, 7.9, new THREE.Vector2(-0.55, 0.2));
 
+/* ---------------------------------------------------------- merging galaxies (sky-fixed, additive, no parallax) */
+{
+  const gTex = new THREE.TextureLoader().load('./assets/galaxies.jpg'); gTex.colorSpace = THREE.SRGBColorSpace;
+  const D = 1350, w = 2 * D * Math.tan(deg(16) / 2), h = w * 783 / 1400;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: gTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, color: new THREE.Color(0.55, 0.55, 0.55) }));
+  const GAL = dirFrom(42, 39);
+  m.position.copy(GAL).multiplyScalar(D); m.lookAt(0, 0, 0); m.rotateZ(deg(-18));
+  m.renderOrder = -6; m.frustumCulled = false; skyRig.add(m);
+}
+
 /* ---------------------------------------------------------- cliffs: painted wall on curved panels behind + sides */
 const texLoader = new THREE.TextureLoader();
-const cliffTex = texLoader.load('./assets/cliff.jpg'); cliffTex.colorSpace = THREE.SRGBColorSpace; cliffTex.anisotropy = 4;
-const cliffTop = texLoader.load('./assets/cliff_top.png'); cliffTop.minFilter = cliffTop.magFilter = THREE.LinearFilter;
-function addCliff({ R, arcDeg, yawDeg, flip = 0, bright = 1, tint = [1, 1, 1], ground = 0.1, cx = 0, cz = 0, sideFade = 0.12, sy = 1.45 }) {
-  const arc = deg(arcDeg), H = R * arc * 9 / 16 * sy;
-  const geo = new THREE.CylinderGeometry(R, R, H, 64, 1, true, Math.PI - arc / 2, arc);
+const cliffTex = texLoader.load('./assets/cliff2.jpg'); cliffTex.colorSpace = THREE.SRGBColorSpace; cliffTex.anisotropy = 8;
+cliffTex.wrapS = THREE.RepeatWrapping;
+const cliffTop = texLoader.load('./assets/cliff2_top.png'); cliffTop.minFilter = cliffTop.magFilter = THREE.LinearFilter; cliffTop.wrapS = THREE.RepeatWrapping;
+// b3: one solid basalt wall sweeping ~250 deg around the back; texture = [rock | mirrored rock] tiles seamlessly.
+// Opaque (no alpha edge fade); only the crisp top silhouette is cut out against the black sky.
+function addCliff({ R, arcDeg, cz = 0, uOff = 0.25, reps = 1, sy = 1.0, ground = 0.08, bright = 1.35 }) {
+  const arc = deg(arcDeg), H = R * arc / (3888 / 1952) / reps * sy;
+  const geo = new THREE.CylinderGeometry(R, R, H, 128, 1, true, Math.PI - arc / 2, arc);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uMap: { value: cliffTex }, uTop: { value: cliffTop }, uFlip: { value: flip }, uB: { value: bright }, uT: { value: new THREE.Vector3(...tint) }, uSide: { value: sideFade } },
-    side: THREE.BackSide, transparent: true, depthWrite: true,
+    uniforms: { uMap: { value: cliffTex }, uTop: { value: cliffTop }, uOff: { value: uOff }, uReps: { value: reps }, uB: { value: bright } },
+    side: THREE.BackSide,
     vertexShader: `varying vec2 vUv; varying vec3 vW; void main(){ vUv = vec2(1.0-uv.x, uv.y); vec4 w = modelMatrix*vec4(position,1.0); vW=w.xyz; gl_Position = projectionMatrix*viewMatrix*w; }`,
-    fragmentShader: `uniform sampler2D uMap, uTop; uniform float uFlip, uB, uSide; uniform vec3 uT; varying vec2 vUv; varying vec3 vW;
+    fragmentShader: `uniform sampler2D uMap, uTop; uniform float uOff, uReps, uB; varying vec2 vUv; varying vec3 vW;
       void main(){
-        vec2 uv = vec2(mix(vUv.x, 1.0-vUv.x, uFlip), vUv.y);
-        float top = texture2D(uTop, vec2(uv.x, 0.5)).r;
-        float a = 1.0 - smoothstep(top - 0.004, top + 0.002, uv.y);
-        a *= smoothstep(0.0, uSide, vUv.x) * smoothstep(1.0, 1.0-uSide, vUv.x);
-        if (a < 0.01) discard;
-        vec3 c = texture2D(uMap, uv).rgb * uB * uT;
-        // the bottom of the picture melts into the real sand
-        c *= smoothstep(0.02, 0.16, uv.y);
-        gl_FragColor = vec4(c, a);
+        float u = vUv.x*uReps + uOff;
+        vec3 tp = texture2D(uTop, vec2(u, 0.5)).rgb;
+        float top = tp.r + tp.g/255.0;
+        // headland ends: the wall steps down toward the open sea side
+        float endT = min(vUv.x, 1.0-vUv.x);
+        top = mix(0.12, top, smoothstep(0.0, 0.09, endT));
+        if (vUv.y > top - 0.001) discard;
+        vec3 c = texture2D(uMap, vec2(u, vUv.y)).rgb * uB;
+        // moon tint: teal moon side (-X) leans teal, rose side (+X) a hint warm
+        float s = clamp(vW.x/18.0, -1.0, 1.0);
+        c *= mix(vec3(0.92,1.03,1.08), vec3(1.07,0.98,0.94), s*0.5+0.5);
+        c *= mix(0.55, 1.0, smoothstep(0.0, 0.07, endT));
+        gl_FragColor = vec4(c, 1.0);
         #include <colorspace_fragment>
       }`
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(cx, -0.1 + H / 2 - ground * H, cz);
-  mesh.rotation.y = -deg(yawDeg);
-  mesh.renderOrder = 2; scene.add(mesh); return mesh;
+  mesh.position.set(0, -0.15 + H / 2 - ground * H, cz);
+  mesh.rotation.y = Math.PI;
+  scene.add(mesh); return mesh;
 }
-addCliff({ R: 19, arcDeg: 125, yawDeg: 180, bright: 0.55, cz: -3 });
-addCliff({ R: 20.5, arcDeg: 95, yawDeg: -100, flip: 1, bright: 0.48, tint: [0.95, 1, 1.05], cz: -4, sideFade: 0.2 });
-addCliff({ R: 20.5, arcDeg: 95, yawDeg: 100, flip: 1, bright: 0.48, tint: [1.05, 1, 0.95], cz: -4, sideFade: 0.2 });
+addCliff({ R: 19.5, arcDeg: 236, cz: -3 });
 // a few real boulders at the cliff foot help the wall sit on the sand
 {
   const rockMat = new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 0.75, metalness: 0.0 });
@@ -337,10 +364,10 @@ function tickAudio(t) {   // slow swells: each voice rises as the swash comes in
   if (!audio) return;
   const now = audio.ctx.currentTime;
   audio.voices.forEach((v, i) => {
-    const ph = t * (0.42 + i * 0.05) + i * 2.1;
-    const s = Math.max(0, Math.sin(ph)); const sw = Math.pow(s, 2.5) * 0.8 + 0.12;
+    const ph = t * (0.34 + i * 0.04) + i * 2.1;
+    const s = Math.max(0, Math.sin(ph)); const sw = Math.pow(s, 2.5) * 1.0 + 0.12;
     v.g.gain.setTargetAtTime(i === 2 ? 0.35 : sw, now, 0.15);
-    v.lp.frequency.setTargetAtTime(300 + 1100 * sw, now, 0.2);
+    v.lp.frequency.setTargetAtTime(300 + 1250 * sw, now, 0.2);
   });
 }
 
