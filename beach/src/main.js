@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-const BUILD = 'Beach b1';
+const BUILD = 'Beach b3';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -67,24 +67,7 @@ function sandH(x, z) {   // gentle real dunes of the beach (meters)
   const k = Math.min(1, Math.max(0, (Math.hypot(x - 0.0, (z + 3.15) * 1.2) - 2.6) / 3));   // flat bed under the blanket
   return k * (0.05 * (vnoise(x * 0.25, z * 0.25) - 0.5) + 0.015 * (vnoise(x * 1.3, z * 1.3) - 0.5));
 }
-const folds = [];
-{ let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
-  for (let i = 0; i < 9; i++) folds.push({ a: r() * Math.PI, c: [bcx + (r() - 0.5) * 2.8, bcz + (r() - 0.5) * 2], len: 0.4 + r() * 0.9, w: 0.03 + r() * 0.05, h: 0.008 + r() * 0.018 }); }
-function blanketLift(x, z) {   // fabric height above the sand
-  const ex = Math.min(x - BL.x0, BL.x1 - x), ez = Math.min(z - BL.z0, BL.z1 - z), e = Math.min(ex, ez);
-  let h = 0.006;
-  for (const f of folds) {   // long soft ridges (rumples), fading at their ends
-    const dx = x - f.c[0], dz = z - f.c[1], ca = Math.cos(f.a), sa = Math.sin(f.a);
-    const u = dx * ca + dz * sa, v = -dx * sa + dz * ca;
-    h += f.h * Math.exp(-(v * v) / (f.w * f.w)) * Math.exp(-(u * u) / (f.len * f.len));
-  }
-  h += 0.006 * vnoise(x * 6, z * 6) + 0.003 * vnoise(x * 17, z * 17);
-  // edges: settle onto the sand, with a little lifted curl in places
-  const edge = Math.min(1, e / 0.12);
-  h = h * (0.25 + 0.75 * edge) + (1 - edge) * (0.012 + 0.01 * vnoise(x * 3 + 5, z * 3));
-  return h;
-}
-function blanketY(x, z) { return sandH(x, z) + blanketLift(x, z); }
+function blanketY(x, z) { return sandH(x, z); }   // blanket removed in b2: just the (flattened) sand
 
 /* ---------------------------------------------------------- sand */
 const sandMat = new THREE.ShaderMaterial({
@@ -105,10 +88,10 @@ const sandMat = new THREE.ShaderMaterial({
       float h0 = fbm(p*3.0)*0.6 + vn(p*vec2(1.2,9.0) + vec2(fbm(p*0.5)*3.0,0.0))*0.25;
       float hx = fbm((p+vec2(e,0))*3.0)*0.6 + vn((p+vec2(e,0))*vec2(1.2,9.0) + vec2(fbm((p+vec2(e,0))*0.5)*3.0,0.0))*0.25;
       float hz = fbm((p+vec2(0,e))*3.0)*0.6 + vn((p+vec2(0,e))*vec2(1.2,9.0) + vec2(fbm((p+vec2(0,e))*0.5)*3.0,0.0))*0.25;
-      vec3 N = normalize(vec3(-(hx-h0)/e*0.06*fd, 1.0, -(hz-h0)/e*0.06*fd));
+      vec3 N = normalize(vec3(-(hx-h0)/e*0.025*fd, 1.0, -(hz-h0)/e*0.025*fd));
       vec3 V = normalize(cameraPosition - vW);
       // swash: the waterline breathes in and out
-      float swell = sin(uTime*0.42)*0.55 + sin(uTime*0.23+1.3)*0.35;
+      float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
       float line = uShore + 1.2 + swell + (fbm(vec2(p.x*0.35, uTime*0.05))-0.5)*1.4;
       float wet = smoothstep(line + 3.5, line - 0.3, p.y);          // z grows toward the beach
       float sheet = smoothstep(line + 0.05, line - 0.6, p.y);        // thin water sheet
@@ -120,24 +103,22 @@ const sandMat = new THREE.ShaderMaterial({
         float ndl = max(dot(N,L),0.0);
         col += base * C * (0.35 + ndl*1.6);
         vec3 H = normalize(L+V);
-        float rough = mix(18.0, 260.0, wet);
-        col += C * pow(max(dot(N,H),0.0), rough) * mix(0.02, 0.35, wet) * (1.0 + sheet*3.0);
-        // glittery speckle: tiny mineral facets catching each moon
-        vec2 cell = floor(p*260.0);
-        float r = h21(cell + float(i)*31.7);
-        vec3 fn = normalize(vec3(h21(cell+3.1)-0.5, 1.2, h21(cell+7.7)-0.5));
-        float g = pow(max(dot(fn,H),0.0), 200.0) * step(0.975, r);
-        col += C * g * 1.2 * fd * (1.0 - wet*0.6);
+        float rough = mix(8.0, 90.0, wet);
+        col += C * pow(max(dot(N,H),0.0), rough) * mix(0.004, 0.08, wet) * (1.0 + sheet*1.5);
+        // b2: no glitter. Only a barely-visible fine micro-grain (very low, broad lobe, near the viewer only)
+        float gr = h21(floor(p*400.0) + float(i)*31.7);
+        // b3: light scattering of fine mineral glints (~12% of b1), soft, moon-facing only
+        vec2 cell = floor(p*320.0);
+        float rr = h21(cell + float(i)*31.7);
+        vec3 fn = normalize(vec3(h21(cell+3.1)-0.5, 1.4, h21(cell+7.7)-0.5));
+        col += C * pow(max(dot(fn,H),0.0), 120.0) * step(0.99, rr) * 0.18 * fd * (1.0 - wet*0.7);
+        col += C * base * 0.25 * (gr - 0.5) * fd * (1.0 - wet);
       }
       col += vec3(0.002,0.0026,0.003);
       // foam line at the swash edge
       float fl = abs(p.y - line);
-      float foam = smoothstep(0.25, 0.0, fl) * smoothstep(0.45, 0.8, fbm(vec2(p.x*1.3, p.y*2.0 - uTime*0.3)));
-      col += foam * (uCA*0.07 + uCB*0.03);
-      // contact darkening under/around the blanket
-      vec2 q = max(vec2(uBL.x - p.x, p.x - uBL.z), 0.0); vec2 r2 = max(vec2(uBL.y - p.y, p.y - uBL.w), 0.0);
-      float bd = length(vec2(max(q.x,q.y), max(r2.x,r2.y)));
-      col *= mix(0.55, 1.0, smoothstep(0.0, 0.12, bd));
+      float foam = smoothstep(0.45, 0.0, fl) * smoothstep(0.45, 0.8, fbm(vec2(p.x*1.3, p.y*2.0 - uTime*0.3)));
+      col += foam * (uCA*0.09 + uCB*0.045);
       col = mix(col, vec3(0.0), smoothstep(80.0, 400.0, d));
       gl_FragColor = vec4(col, 1.0);
       #include <tonemapping_fragment>
@@ -162,17 +143,17 @@ const waterMat = new THREE.ShaderMaterial({
     vec2 wgrad(vec2 p, float t){
       vec2 g = vec2(0.0);
       // a few directional swells + noise chop
-      vec4 dirs[4]; dirs[0]=vec4(0.10,1.0,0.55,0.9); dirs[1]=vec4(-0.35,1.0,1.1,1.3); dirs[2]=vec4(0.6,1.0,2.3,1.9); dirs[3]=vec4(-0.8,0.6,4.1,2.6);
+      vec4 dirs[4]; dirs[0]=vec4(0.10,1.0,0.45,0.7); dirs[1]=vec4(-0.35,1.0,0.95,1.0); dirs[2]=vec4(0.6,1.0,2.3,1.9); dirs[3]=vec4(-0.8,0.6,4.1,2.6);
       for(int i=0;i<4;i++){ vec2 d = normalize(dirs[i].xy); float k = dirs[i].z; float ph = dot(p,d)*k + t*dirs[i].w;
-        g += d * cos(ph) * (0.16 / k); }
+        g += d * cos(ph) * (0.10 / k) * (i<2 ? 1.4 : 0.35); }
       float e = 0.15; vec2 q = p*1.3 + vec2(0.0, t*0.25);
-      float n0 = fbm(q); g += vec2(fbm(q+vec2(e,0))-n0, fbm(q+vec2(0,e))-n0)/e * 0.05;
+      float n0 = fbm(q); g += vec2(fbm(q+vec2(e,0))-n0, fbm(q+vec2(0,e))-n0)/e * 0.012;
       return g;
     }
     void main(){
       vec3 toC = cameraPosition - vW; float d = length(toC); vec3 V = toC/d;
-      float lod = 1.0 / (1.0 + d*0.02);
-      vec2 g = wgrad(vW.xz, uTime) * (0.4 + 0.6*lod);
+      float lod = 1.0 / (1.0 + d*0.03);
+      vec2 g = wgrad(vW.xz, uTime) * (0.55 + 0.45*lod);
       vec3 N = normalize(vec3(-g.x, 1.0, -g.y));
       vec3 R = reflect(-V, N);
       float fres = 0.02 + 0.98*pow(1.0 - max(dot(N,V),0.0), 5.0);
@@ -181,12 +162,19 @@ const waterMat = new THREE.ShaderMaterial({
         vec3 L = i==0 ? uLA : uLB; vec3 C = i==0 ? uCA : uCB;
         float c = max(dot(R,L),0.0);
         float sz = i==0 ? 1.0 : 0.55;
-        col += C * (pow(c, 700.0/sz)*7.0 + pow(c, 60.0/sz)*0.8 + pow(c, 14.0)*0.025) * (0.4 + fres*2.0);
+        col += C * (pow(c, 160.0/sz)*0.9 + pow(c, 40.0/sz)*0.35 + pow(c, 10.0)*0.02) * (0.4 + fres*1.5);
       }
       // shallow edge: fade into the wet sand, faint foam
-      float swell = sin(uTime*0.42)*0.55 + sin(uTime*0.23+1.3)*0.35;
+      float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
       float line = uShore + 1.2 + swell + (fbm(vec2(vW.x*0.35, uTime*0.05))-0.5)*1.4;
       float a = smoothstep(line - 0.2, line - 1.8, vW.z);
+      // b3: a soft rolling surf crest that travels in toward the beach and dissolves at the swash
+      float ph = fract(uTime*0.054);
+      float cz = line - 9.0 + ph*8.5;
+      float band = exp(-pow((vW.z - cz)/0.7, 2.0)) * smoothstep(0.0, 0.25, ph) * (1.0 - smoothstep(0.75, 1.0, ph));
+      float fn2 = smoothstep(0.35, 0.75, fbm(vec2(vW.x*0.9, vW.z*1.6 - uTime*0.4)));
+      col += band * (0.35 + 0.65*fn2) * (uCA*0.05 + uCB*0.03) * (1.0 - smoothstep(150.0, 900.0, d));
+      col += band * (uCA*0.012 + uCB*0.008);  // crest catches both moons softly
       float hz = smoothstep(150.0, 900.0, d);
       col = mix(col, vec3(0.0), hz*0.9);
       gl_FragColor = vec4(col, a);
@@ -263,39 +251,54 @@ function makeMoon(M, seed, phaseDir) {
 makeMoon(MOON_A, 1.3, new THREE.Vector2(0.25, 0.15));
 makeMoon(MOON_B, 7.9, new THREE.Vector2(-0.55, 0.2));
 
+/* ---------------------------------------------------------- merging galaxies (sky-fixed, additive, no parallax) */
+{
+  const gTex = new THREE.TextureLoader().load('./assets/galaxies.jpg'); gTex.colorSpace = THREE.SRGBColorSpace;
+  const D = 1350, w = 2 * D * Math.tan(deg(16) / 2), h = w * 783 / 1400;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: gTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, color: new THREE.Color(0.55, 0.55, 0.55) }));
+  const GAL = dirFrom(42, 39);
+  m.position.copy(GAL).multiplyScalar(D); m.lookAt(0, 0, 0); m.rotateZ(deg(-18));
+  m.renderOrder = -6; m.frustumCulled = false; skyRig.add(m);
+}
+
 /* ---------------------------------------------------------- cliffs: painted wall on curved panels behind + sides */
 const texLoader = new THREE.TextureLoader();
-const cliffTex = texLoader.load('./assets/cliff.jpg'); cliffTex.colorSpace = THREE.SRGBColorSpace; cliffTex.anisotropy = 4;
-const cliffTop = texLoader.load('./assets/cliff_top.png'); cliffTop.minFilter = cliffTop.magFilter = THREE.LinearFilter;
-function addCliff({ R, arcDeg, yawDeg, flip = 0, bright = 1, tint = [1, 1, 1], ground = 0.1, cx = 0, cz = 0, sideFade = 0.12, sy = 1.45 }) {
-  const arc = deg(arcDeg), H = R * arc * 9 / 16 * sy;
-  const geo = new THREE.CylinderGeometry(R, R, H, 64, 1, true, Math.PI - arc / 2, arc);
+const cliffTex = texLoader.load('./assets/cliff2.jpg'); cliffTex.colorSpace = THREE.SRGBColorSpace; cliffTex.anisotropy = 8;
+cliffTex.wrapS = THREE.RepeatWrapping;
+const cliffTop = texLoader.load('./assets/cliff2_top.png'); cliffTop.minFilter = cliffTop.magFilter = THREE.LinearFilter; cliffTop.wrapS = THREE.RepeatWrapping;
+// b3: one solid basalt wall sweeping ~250 deg around the back; texture = [rock | mirrored rock] tiles seamlessly.
+// Opaque (no alpha edge fade); only the crisp top silhouette is cut out against the black sky.
+function addCliff({ R, arcDeg, cz = 0, uOff = 0.25, reps = 1, sy = 1.0, ground = 0.08, bright = 1.35 }) {
+  const arc = deg(arcDeg), H = R * arc / (3888 / 1952) / reps * sy;
+  const geo = new THREE.CylinderGeometry(R, R, H, 128, 1, true, Math.PI - arc / 2, arc);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uMap: { value: cliffTex }, uTop: { value: cliffTop }, uFlip: { value: flip }, uB: { value: bright }, uT: { value: new THREE.Vector3(...tint) }, uSide: { value: sideFade } },
-    side: THREE.BackSide, transparent: true, depthWrite: true,
+    uniforms: { uMap: { value: cliffTex }, uTop: { value: cliffTop }, uOff: { value: uOff }, uReps: { value: reps }, uB: { value: bright } },
+    side: THREE.BackSide,
     vertexShader: `varying vec2 vUv; varying vec3 vW; void main(){ vUv = vec2(1.0-uv.x, uv.y); vec4 w = modelMatrix*vec4(position,1.0); vW=w.xyz; gl_Position = projectionMatrix*viewMatrix*w; }`,
-    fragmentShader: `uniform sampler2D uMap, uTop; uniform float uFlip, uB, uSide; uniform vec3 uT; varying vec2 vUv; varying vec3 vW;
+    fragmentShader: `uniform sampler2D uMap, uTop; uniform float uOff, uReps, uB; varying vec2 vUv; varying vec3 vW;
       void main(){
-        vec2 uv = vec2(mix(vUv.x, 1.0-vUv.x, uFlip), vUv.y);
-        float top = texture2D(uTop, vec2(uv.x, 0.5)).r;
-        float a = 1.0 - smoothstep(top - 0.004, top + 0.002, uv.y);
-        a *= smoothstep(0.0, uSide, vUv.x) * smoothstep(1.0, 1.0-uSide, vUv.x);
-        if (a < 0.01) discard;
-        vec3 c = texture2D(uMap, uv).rgb * uB * uT;
-        // the bottom of the picture melts into the real sand
-        c *= smoothstep(0.02, 0.16, uv.y);
-        gl_FragColor = vec4(c, a);
+        float u = vUv.x*uReps + uOff;
+        vec3 tp = texture2D(uTop, vec2(u, 0.5)).rgb;
+        float top = tp.r + tp.g/255.0;
+        // headland ends: the wall steps down toward the open sea side
+        float endT = min(vUv.x, 1.0-vUv.x);
+        top = mix(0.12, top, smoothstep(0.0, 0.09, endT));
+        if (vUv.y > top - 0.001) discard;
+        vec3 c = texture2D(uMap, vec2(u, vUv.y)).rgb * uB;
+        // moon tint: teal moon side (-X) leans teal, rose side (+X) a hint warm
+        float s = clamp(vW.x/18.0, -1.0, 1.0);
+        c *= mix(vec3(0.92,1.03,1.08), vec3(1.07,0.98,0.94), s*0.5+0.5);
+        c *= mix(0.55, 1.0, smoothstep(0.0, 0.07, endT));
+        gl_FragColor = vec4(c, 1.0);
         #include <colorspace_fragment>
       }`
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(cx, -0.1 + H / 2 - ground * H, cz);
-  mesh.rotation.y = -deg(yawDeg);
-  mesh.renderOrder = 2; scene.add(mesh); return mesh;
+  mesh.position.set(0, -0.15 + H / 2 - ground * H, cz);
+  mesh.rotation.y = Math.PI;
+  scene.add(mesh); return mesh;
 }
-addCliff({ R: 19, arcDeg: 125, yawDeg: 180, bright: 0.55, cz: -3 });
-addCliff({ R: 20.5, arcDeg: 95, yawDeg: -100, flip: 1, bright: 0.48, tint: [0.95, 1, 1.05], cz: -4, sideFade: 0.2 });
-addCliff({ R: 20.5, arcDeg: 95, yawDeg: 100, flip: 1, bright: 0.48, tint: [1.05, 1, 0.95], cz: -4, sideFade: 0.2 });
+addCliff({ R: 19.5, arcDeg: 236, cz: -3 });
 // a few real boulders at the cliff foot help the wall sit on the sand
 {
   const rockMat = new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 0.75, metalness: 0.0 });
@@ -313,76 +316,12 @@ addCliff({ R: 20.5, arcDeg: 95, yawDeg: 100, flip: 1, bright: 0.48, tint: [1.05,
   }
 }
 
-/* ---------------------------------------------------------- blanket */
-function weaveNormalTex() {
-  const S = 256, c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
-  const id = g.createImageData(S, S);
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const wx = Math.sin(x / S * Math.PI * 2 * 48), wy = Math.sin(y / S * Math.PI * 2 * 48);
-    const check = ((Math.floor(x / S * 48) + Math.floor(y / S * 48)) & 1) ? 1 : -1;
-    const nx = 0.25 * wx * check + (Math.random() - 0.5) * 0.08, ny = 0.25 * wy * -check + (Math.random() - 0.5) * 0.08;
-    const i = (y * S + x) * 4; id.data[i] = 128 + nx * 127; id.data[i + 1] = 128 + ny * 127; id.data[i + 2] = 255; id.data[i + 3] = 255;
-  }
-  g.putImageData(id, 0, 0); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 4); return t;
-}
-const blanketMat = new THREE.MeshPhysicalMaterial({
-  color: 0x4b4d51, roughness: 0.8, metalness: 0, sheen: 0.6, sheenColor: new THREE.Color(0x6c7378), sheenRoughness: 0.5,
-  normalMap: weaveNormalTex(), normalScale: new THREE.Vector2(0.35, 0.35), side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
-});
-{
-  const W = BL.x1 - BL.x0, L = BL.z1 - BL.z0;
-  const g = new THREE.PlaneGeometry(W, L, 180, 130); g.rotateX(-Math.PI / 2);
-  const pa = g.attributes.position;
-  for (let i = 0; i < pa.count; i++) {
-    let x = pa.getX(i) + bcx, z = pa.getZ(i) + bcz;
-    // slightly irregular outline (fabric never lies perfectly square)
-    const ex = Math.min(x - BL.x0, BL.x1 - x), ez = Math.min(z - BL.z0, BL.z1 - z);
-    x += (vnoise(z * 1.5, 3) - 0.5) * 0.07 * Math.max(0, 1 - ex / 0.3) * Math.sign(x - bcx);
-    z += (vnoise(x * 1.5, 9) - 0.5) * 0.07 * Math.max(0, 1 - ez / 0.3) * Math.sign(z - bcz);
-    pa.setXYZ(i, x, blanketY(x, z), z);
-  }
-  g.computeVertexNormals();
-  const b = new THREE.Mesh(g, blanketMat); b.receiveShadow = true; b.castShadow = false; scene.add(b);
-}
-
-/* ---------------------------------------------------------- clothes pile (extra room on the +X side) */
-{
-  const cols = [0x26272b, 0x262c3a, 0x3a1e22, 0x1c1c1f, 0x34363d];
-  const mats = cols.map(c => new THREE.MeshPhysicalMaterial({ color: c, roughness: 0.85, sheen: 1.0, sheenColor: new THREE.Color(0x9098a0), sheenRoughness: 0.4, normalMap: blanketMat.normalMap, normalScale: new THREE.Vector2(0.4, 0.4) }));
-  const pile = new THREE.Group(); const px = 1.05, pz = -2.75;
-  const pieces = [   // [type, x, z, sx, sy, sz, rot, mat]  folded garments + one loosely crumpled top
-    ['fold', 0.0, 0.0, 0.46, 0.022, 0.34, 0.25, 1],
-    ['fold', 0.04, -0.02, 0.38, 0.02, 0.28, -0.35, 4],
-    ['crumple', 0.14, 0.12, 0.36, 0.035, 0.28, 1.1, 2],
-    ['fold', -0.22, -0.18, 0.3, 0.018, 0.22, 0.9, 0],
-  ];
-  let yStack = 0;
-  pieces.forEach(([t, x, z, sx, sy, sz, rot, mi], k) => {
-    let g;
-    if (t === 'fold') { g = new RoundedBoxGeometry(1, 1, 1, 6, 0.3); }
-    else g = new THREE.IcosahedronGeometry(0.5, 4);
-    const pa = g.attributes.position;
-    for (let i = 0; i < pa.count; i++) {
-      const v = new THREE.Vector3().fromBufferAttribute(pa, i);
-      const n = vnoise(v.x * 7 + k * 3, v.z * 7 + v.y * 5) - 0.5, n2 = vnoise(v.x * 17 + k, v.z * 17 - v.y * 9) - 0.5;
-      if (t === 'crumple') { v.multiplyScalar(1 + n * 0.35 + n2 * 0.12); v.y *= 0.8; } else { v.y += n * 0.35 + n2 * 0.12; v.x += n2 * 0.04; }
-      pa.setXYZ(i, v.x, v.y, v.z);
-    }
-    g.computeVertexNormals();
-    const m = new THREE.Mesh(g, mats[mi]); m.scale.set(sx, sy, sz); m.rotation.y = rot;
-    m.position.set(px + x, 0, pz + z);
-    m.position.y = blanketY(px + x, pz + z) + sy * 0.45 + 0.014 * k;
-    m.castShadow = m.receiveShadow = true; pile.add(m);
-  });
-  scene.add(pile);
-}
-
 /* ---------------------------------------------------------- music player on the head edge */
-const ledMat = new THREE.MeshBasicMaterial({ color: 0x6fe0d0, toneMapped: false, transparent: true, opacity: 0.9 });
+const ledMat = new THREE.MeshBasicMaterial({ color: 0x6fe0d0, toneMapped: false, transparent: true, opacity: 0.55 });
 {
   const g = new RoundedBoxGeometry(0.075, 0.011, 0.14, 4, 0.005);
-  const m = new THREE.Mesh(g, new THREE.MeshPhysicalMaterial({ color: 0x0c0d0f, roughness: 0.35, metalness: 0.5, clearcoat: 0.6, clearcoatRoughness: 0.3 }));
-  const x = 0.55, z = -2.2; m.position.set(x, blanketY(x, z) + 0.006, z); m.rotation.y = 0.35;
+  const m = new THREE.Mesh(g, new THREE.MeshPhysicalMaterial({ color: 0x0c0d0f, roughness: 0.55, metalness: 0.4, clearcoat: 0.3, clearcoatRoughness: 0.5 }));
+  const x = 0.75, z = -2.25; m.position.set(x, sandH(x, z) + 0.0055, z); m.rotation.y = 0.35;
   m.castShadow = true; scene.add(m);
   const led = new THREE.Mesh(new THREE.CircleGeometry(0.0022, 12).rotateX(-Math.PI / 2), ledMat);
   led.position.set(0.018, 0.0058, 0.05); m.add(led);
@@ -425,10 +364,10 @@ function tickAudio(t) {   // slow swells: each voice rises as the swash comes in
   if (!audio) return;
   const now = audio.ctx.currentTime;
   audio.voices.forEach((v, i) => {
-    const ph = t * (0.42 + i * 0.05) + i * 2.1;
-    const s = Math.max(0, Math.sin(ph)); const sw = Math.pow(s, 2.5) * 0.8 + 0.12;
+    const ph = t * (0.34 + i * 0.04) + i * 2.1;
+    const s = Math.max(0, Math.sin(ph)); const sw = Math.pow(s, 2.5) * 1.0 + 0.12;
     v.g.gain.setTargetAtTime(i === 2 ? 0.35 : sw, now, 0.15);
-    v.lp.frequency.setTargetAtTime(300 + 1100 * sw, now, 0.2);
+    v.lp.frequency.setTargetAtTime(300 + 1250 * sw, now, 0.2);
   });
 }
 
