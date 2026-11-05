@@ -2,8 +2,9 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
-const BUILD = 'Beach b6';
+const BUILD = 'Beach b7';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -373,10 +374,21 @@ function addCliff({ R, arcDeg, cz = 0, uOff = 0.25, reps = 1, sy = 1.0, ground =
 addCliff({ R: 19.5, arcDeg: 236, cz: -3 });
 // a few real boulders at the cliff foot help the wall sit on the sand
 {
-  const rockMat = new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 0.75, metalness: 0.0 });
+  // b7: dark basalt, smooth normals, grid-free simplex mottling in world space that fades with pixel footprint
+  const rockMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.08, 0.08, 0.09), roughness: 0.92, metalness: 0.0 });
+  rockMat.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRW;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvRW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vRW;\n' + NOISE2)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        { float fw = length(fwidth(vRW)); vec3 P = vRW;
+          float big = (snoise(P.xz * 0.9) + snoise(P.xy * 0.9 + 3.1) + snoise(P.zy * 0.9 + 7.3)) / 3.0;
+          float fine = (snoise(P.xz * 7.0) + snoise(P.xy * 7.0 + 1.7) + snoise(P.zy * 7.0 + 5.2)) / 3.0 * (1.0 - smoothstep(0.02, 0.08, fw));
+          diffuseColor.rgb *= clamp(0.85 + 0.35 * big + 0.2 * fine, 0.55, 1.25); }`);
+  };
   let s = 11; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
   for (let i = 0; i < 26; i++) {
-    const g = new THREE.IcosahedronGeometry(1, 4); const pa = g.attributes.position;
+    let g = new THREE.IcosahedronGeometry(1, 5); g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g); const pa = g.attributes.position;
     for (let j = 0; j < pa.count; j++) { const v = new THREE.Vector3().fromBufferAttribute(pa, j); v.multiplyScalar(0.7 + 0.45 * vnoise(v.x * 1.5 + i, v.y * 1.5 + v.z * 1.3) + 0.08 * vnoise(v.x * 6, v.z * 6 + v.y)); pa.setXYZ(j, v.x, v.y, v.z); }
     g.computeVertexNormals();
     const m = new THREE.Mesh(g, rockMat);
