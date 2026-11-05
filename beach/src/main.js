@@ -4,7 +4,7 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
-const BUILD = 'Beach b8';
+const BUILD = 'Beach b9';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -366,7 +366,7 @@ function addCliff({ R, arcDeg, cz = 0, uOff = 0.25, reps = 1, sy = 1.0, ground =
         if (vUv.y > top - 0.001) discard;
         vec3 c = texture2D(uMap, vec2(u, vUv.y)).rgb * uB;
         // moon tint: teal moon side (-X) leans teal, rose side (+X) a hint warm
-        float s = clamp(vW.x/18.0, -1.0, 1.0);
+        float s = clamp(vW.x/29.5, -1.0, 1.0);   // b9: tint span scaled with the wall radius
         c *= mix(vec3(0.92,1.03,1.08), vec3(1.07,0.98,0.94), s*0.5+0.5);
         c *= mix(0.55, 1.0, smoothstep(0.0, 0.07, endT));
         gl_FragColor = vec4(c, 1.0);
@@ -378,7 +378,7 @@ function addCliff({ R, arcDeg, cz = 0, uOff = 0.25, reps = 1, sy = 1.0, ground =
   mesh.rotation.y = Math.PI;
   scene.add(mesh); return mesh;
 }
-addCliff({ R: 19.5, arcDeg: 236, cz: -3 });
+addCliff({ R: 32, arcDeg: 236, cz: -3 });   // b9: pushed back from 19.5 m; height scales with R so the angular size stays the same
 // a few real boulders at the cliff foot help the wall sit on the sand
 {
   // b7: dark basalt, smooth normals, grid-free simplex mottling in world space that fades with pixel footprint
@@ -399,8 +399,8 @@ addCliff({ R: 19.5, arcDeg: 236, cz: -3 });
     for (let j = 0; j < pa.count; j++) { const v = new THREE.Vector3().fromBufferAttribute(pa, j); v.multiplyScalar(0.7 + 0.45 * vnoise(v.x * 1.5 + i, v.y * 1.5 + v.z * 1.3) + 0.08 * vnoise(v.x * 6, v.z * 6 + v.y)); pa.setXYZ(j, v.x, v.y, v.z); }
     g.computeVertexNormals();
     const m = new THREE.Mesh(g, rockMat);
-    const a = deg(105 + r() * 150) , R = 15.5 + r() * 2.5;
-    const sc = 0.4 + r() * 1.3;
+    const a = deg(105 + r() * 150) , R = 28.0 + r() * 2.8;   // b9: follows the wall back to its foot
+    const sc = (0.4 + r() * 1.3) * 1.4;   // b9: a bit larger at the new distance
     m.position.set(Math.sin(a) * R, sc * 0.2, -3 - Math.cos(a) * R);
     m.scale.set(sc * (1 + r()), sc * (0.6 + r() * 0.6), sc * (1 + r()));
     m.rotation.set(r() * 3, r() * 3, r() * 3); scene.add(m);
