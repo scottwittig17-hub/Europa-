@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-const BUILD = 'Beach b5';
+const BUILD = 'Beach b6';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -401,6 +401,9 @@ addCliff({ R: 19.5, arcDeg: 236, cz: -3 });
     const ex = Math.min(x - BL.x0, BL.x1 - x), ez = Math.min(z - BL.z0, BL.z1 - z);
     x += (vnoise(z * 1.5, 3) - 0.5) * 0.08 * Math.max(0, 1 - ex / 0.3) * Math.sign(x - bcx);
     z += (vnoise(x * 1.5, 9) - 0.5) * 0.08 * Math.max(0, 1 - ez / 0.3) * Math.sign(z - bcz);
+    // b6: fold the foot-right corner back over itself (reflect across the line 0.38 m in from the corner)
+    const FC = 0.6, u = (x - (BL.x1 - FC)) + ((BL.z0 + FC) - z) - FC;
+    if (u > 0) { const fy = blanketY(x - u, z + u) + 0.014 + 0.025 * Math.min(1, u / 0.08); pa.setXYZ(i, x - u, fy, z + u); continue; }
     pa.setXYZ(i, x, blanketY(x, z), z);
   }
   g.computeVertexNormals();
@@ -416,6 +419,35 @@ const ledMat = new THREE.MeshBasicMaterial({ color: 0x6fe0d0, toneMapped: false,
   m.castShadow = true; scene.add(m);
   const led = new THREE.Mesh(new THREE.CircleGeometry(0.0022, 12).rotateX(-Math.PI / 2), ledMat);
   led.position.set(0.018, 0.0058, 0.05); m.add(led);
+}
+
+/* ---------------------------------------------------------- b6: warm radio glow (fake additive patch, slow pulse) */
+const glowU = { uTime: U.uTime };
+{
+  const gm = new THREE.ShaderMaterial({ uniforms: glowU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv*2.0-1.0; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `uniform float uTime; varying vec2 vUv; void main(){ float r = length(vUv);
+      float a = exp(-r*r*5.0) * smoothstep(1.0, 0.7, r);
+      float pulse = 0.86 + 0.08*sin(uTime*0.9) + 0.06*sin(uTime*2.3 + 1.7);
+      gl_FragColor = vec4(vec3(1.0,0.55,0.22)*a*0.12*pulse, 1.0); }` });
+  const gx = 0.55, gz = -2.2, gs = 1.3, gg = new THREE.PlaneGeometry(gs, gs, 24, 24); gg.rotateX(-Math.PI / 2);
+  const ga = gg.attributes.position;
+  for (let i = 0; i < ga.count; i++) { const x = ga.getX(i) + gx, z = ga.getZ(i) + gz; ga.setXYZ(i, x, blanketY(x, z) + 0.004, z); }
+  scene.add(new THREE.Mesh(gg, gm));
+}
+
+/* ---------------------------------------------------------- b6: soft pillow at the head end */
+{
+  const pg = new RoundedBoxGeometry(0.52, 0.11, 0.30, 5, 0.05);
+  const pp = pg.attributes.position;
+  for (let i = 0; i < pp.count; i++) { const x = pp.getX(i), y = pp.getY(i), z = pp.getZ(i);
+    const k = (1 - Math.pow(Math.abs(x) / 0.26, 2)) * (1 - Math.pow(Math.abs(z) / 0.15, 2));
+    pp.setY(i, y * (0.55 + 0.45 * Math.max(0, k))); }
+  pg.computeVertexNormals();
+  const pm = new THREE.Mesh(pg, new THREE.MeshStandardMaterial({ color: new THREE.Color(0.62, 0.60, 0.56), roughness: 0.97, metalness: 0 }));
+  const px = -0.35, pz = -2.28; pm.position.set(px, blanketY(px, pz) + 0.035, pz); pm.rotation.y = 0.04;
+  pm.castShadow = true; pm.receiveShadow = true; scene.add(pm);
 }
 
 /* ---------------------------------------------------------- lie-down marker */
@@ -449,7 +481,27 @@ function startAudio() {
     src.connect(lp).connect(g).connect(p).connect(master); src.start(0, Math.random() * 3); return { g, lp };
   };
   const voices = [mk(-0.5, 700, 0.7), mk(0.5, 900, 0.7), mk(0, 380, 0.5)];
-  audio = { ctx, voices };
+  // b6: breeze (band-passed noise, slow swell) + rare distant bird / cliff creak, quiet
+  const amb = ctx.createGain(); amb.gain.value = 0.10; amb.connect(ctx.destination);
+  const wsrc = ctx.createBufferSource(); wsrc.buffer = buf; wsrc.loop = true; wsrc.playbackRate.value = 0.6;
+  const wbp = ctx.createBiquadFilter(); wbp.type = 'bandpass'; wbp.frequency.value = 420; wbp.Q.value = 0.6;
+  const wg = ctx.createGain(); wg.gain.value = 0;
+  wsrc.connect(wbp).connect(wg).connect(amb); wsrc.start(0, Math.random() * 3);
+  audio = { ctx, voices, wind: { g: wg, bp: wbp }, amb, nextCall: ctx.currentTime + 12 + Math.random() * 15 };
+}
+function distantCall() {
+  const { ctx, amb } = audio, t0 = ctx.currentTime, pan = ctx.createStereoPanner(); pan.pan.value = Math.random() * 1.6 - 0.8; pan.connect(amb);
+  if (Math.random() < 0.6) {           // far-off bird: two soft falling whistles
+    for (let k = 0; k < 2; k++) { const o = ctx.createOscillator(), g = ctx.createGain(), s = t0 + k * 0.42;
+      const f = 2100 + Math.random() * 500; o.frequency.setValueAtTime(f, s); o.frequency.exponentialRampToValueAtTime(f * 0.72, s + 0.3);
+      g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(0.05, s + 0.05); g.gain.exponentialRampToValueAtTime(0.0005, s + 0.34);
+      o.connect(g).connect(pan); o.start(s); o.stop(s + 0.4); }
+  } else {                             // soft low cliff creak
+    const o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(70, t0); o.frequency.linearRampToValueAtTime(95, t0 + 0.9); lp.type = 'lowpass'; lp.frequency.value = 320;
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.06, t0 + 0.3); g.gain.linearRampToValueAtTime(0, t0 + 1.0);
+    o.connect(lp).connect(g).connect(pan); o.start(t0); o.stop(t0 + 1.05);
+  }
 }
 function tickAudio(t) {   // slow swells: each voice rises as the swash comes in, hisses down as it recedes
   if (!audio) return;
@@ -460,6 +512,10 @@ function tickAudio(t) {   // slow swells: each voice rises as the swash comes in
     v.g.gain.setTargetAtTime(i === 2 ? 0.35 : sw, now, 0.15);
     v.lp.frequency.setTargetAtTime(300 + 1250 * sw, now, 0.2);
   });
+  const w = 0.5 + 0.3 * Math.sin(t * 0.11) + 0.2 * Math.sin(t * 0.047 + 1.3);   // breeze rises and falls over ~10-60 s
+  audio.wind.g.gain.setTargetAtTime(0.25 + 0.75 * w, now, 1.5);
+  audio.wind.bp.frequency.setTargetAtTime(300 + 350 * w, now, 1.5);
+  if (now > audio.nextCall) { distantCall(); audio.nextCall = now + 25 + Math.random() * 35; }
 }
 
 /* ---------------------------------------------------------- lying down / standing */
