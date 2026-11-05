@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-const BUILD = 'Beach b3';
+const BUILD = 'Beach b4';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -82,43 +82,47 @@ const sandMat = new THREE.ShaderMaterial({
     void main(){
       vec2 p = vW.xz;
       float d = length(vW - cameraPosition);
-      // procedural normal: ripples + grain, fading with distance (no shimmer far away)
-      float fd = 1.0 - smoothstep(6.0, 40.0, d);
-      float e = 0.02;
-      float h0 = fbm(p*3.0)*0.6 + vn(p*vec2(1.2,9.0) + vec2(fbm(p*0.5)*3.0,0.0))*0.25;
-      float hx = fbm((p+vec2(e,0))*3.0)*0.6 + vn((p+vec2(e,0))*vec2(1.2,9.0) + vec2(fbm((p+vec2(e,0))*0.5)*3.0,0.0))*0.25;
-      float hz = fbm((p+vec2(0,e))*3.0)*0.6 + vn((p+vec2(0,e))*vec2(1.2,9.0) + vec2(fbm((p+vec2(0,e))*0.5)*3.0,0.0))*0.25;
-      vec3 N = normalize(vec3(-(hx-h0)/e*0.025*fd, 1.0, -(hz-h0)/e*0.025*fd));
+      // b4: matte volcanic sand. Isotropic wind ripples (no long brushed streaks) + fine grain.
+      float fd = 1.0 - smoothstep(4.0, 30.0, d);          // micro detail fades out before it can alias
+      float fg = 1.0 - smoothstep(2.0, 12.0, d);
+      float warp = fbm(p*0.6)*6.0;
+      vec2 rd = normalize(vec2(0.35, 1.0));
+      float rp = dot(p, rd)*14.0 + warp;                   // ripple crest phase
+      vec2 rg = rd*14.0*cos(rp)*0.5*(0.5+0.5*vn(p*0.4));
+      float e = 0.01;
+      float g0 = vn(p*90.0), gx = vn((p+vec2(e,0))*90.0), gz = vn((p+vec2(0,e))*90.0);
+      vec2 gg = vec2(gx-g0, gz-g0)/e;
+      vec3 N = normalize(vec3(-(rg.x*0.004*fd + gg.x*0.0035*fg), 1.0, -(rg.y*0.004*fd + gg.y*0.0035*fg)));
       vec3 V = normalize(cameraPosition - vW);
       // swash: the waterline breathes in and out
       float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
       float line = uShore + 1.2 + swell + (fbm(vec2(p.x*0.35, uTime*0.05))-0.5)*1.4;
-      float wet = smoothstep(line + 3.5, line - 0.3, p.y);          // z grows toward the beach
+      float wet = smoothstep(line + 3.0, line - 0.3, p.y);          // z grows toward the beach
       float sheet = smoothstep(line + 0.05, line - 0.6, p.y);        // thin water sheet
-      vec3 base = mix(vec3(0.011,0.011,0.012), vec3(0.004,0.0045,0.005), wet);
-      base *= 0.8 + 0.4*fbm(p*0.7);
+      // albedo: dark basalt grains, salt-and-pepper at several scales (visible up close), darker when wet
+      float grain = vn(p*220.0)*0.55 + vn(p*70.0)*0.3 + h21(floor(p*400.0))*0.15;
+      grain = mix(0.5, grain, fg);
+      vec3 base = vec3(0.016,0.015,0.015) * (0.55 + 0.9*grain) * (0.85 + 0.3*fbm(p*0.7));
+      base = mix(base, base*0.4, wet);
       vec3 col = vec3(0.0);
       for(int i=0;i<2;i++){
         vec3 L = i==0 ? uLA : uLB; vec3 C = i==0 ? uCA : uCB * 0.6;
         float ndl = max(dot(N,L),0.0);
-        col += base * C * (0.35 + ndl*1.6);
+        col += base * C * (0.3 + ndl*1.4);                     // Lambert only: no dry specular at all
         vec3 H = normalize(L+V);
-        float rough = mix(8.0, 90.0, wet);
-        col += C * pow(max(dot(N,H),0.0), rough) * mix(0.004, 0.08, wet) * (1.0 + sheet*1.5);
-        // b2: no glitter. Only a barely-visible fine micro-grain (very low, broad lobe, near the viewer only)
-        float gr = h21(floor(p*400.0) + float(i)*31.7);
-        // b3: light scattering of fine mineral glints (~12% of b1), soft, moon-facing only
+        // gentle wet sheen only on the wet band / thin water sheet
+        col += C * pow(max(dot(N,H),0.0), 60.0) * 0.03 * wet * (0.3 + sheet);
+        // sparse soft mineral glints (~12% of b1), moon-facing only
         vec2 cell = floor(p*320.0);
         float rr = h21(cell + float(i)*31.7);
         vec3 fn = normalize(vec3(h21(cell+3.1)-0.5, 1.4, h21(cell+7.7)-0.5));
-        col += C * pow(max(dot(fn,H),0.0), 120.0) * step(0.99, rr) * 0.18 * fd * (1.0 - wet*0.7);
-        col += C * base * 0.25 * (gr - 0.5) * fd * (1.0 - wet);
+        col += C * pow(max(dot(fn,H),0.0), 120.0) * step(0.99, rr) * 0.16 * fd * (1.0 - wet*0.8);
       }
       col += vec3(0.002,0.0026,0.003);
       // foam line at the swash edge
       float fl = abs(p.y - line);
       float foam = smoothstep(0.45, 0.0, fl) * smoothstep(0.45, 0.8, fbm(vec2(p.x*1.3, p.y*2.0 - uTime*0.3)));
-      col += foam * (uCA*0.09 + uCB*0.045);
+      col += foam * (uCA*0.06 + uCB*0.03);
       col = mix(col, vec3(0.0), smoothstep(80.0, 400.0, d));
       gl_FragColor = vec4(col, 1.0);
       #include <tonemapping_fragment>
@@ -140,41 +144,61 @@ const waterMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform float uTime, uShore; uniform vec3 uLA,uCA,uLB,uCB; varying vec3 vW;
     ${NOISE}
-    vec2 wgrad(vec2 p, float t){
+    // b4: every swell travels TOWARD the shore (+Z), within +-25 deg of the shore normal.
+    // phase = dot(p,d)*k - w*t  -> crests move along +d.
+    vec2 wgrad(vec2 p, float t, out float crest){
       vec2 g = vec2(0.0);
-      // a few directional swells + noise chop
-      vec4 dirs[4]; dirs[0]=vec4(0.10,1.0,0.45,0.7); dirs[1]=vec4(-0.35,1.0,0.95,1.0); dirs[2]=vec4(0.6,1.0,2.3,1.9); dirs[3]=vec4(-0.8,0.6,4.1,2.6);
-      for(int i=0;i<4;i++){ vec2 d = normalize(dirs[i].xy); float k = dirs[i].z; float ph = dot(p,d)*k + t*dirs[i].w;
-        g += d * cos(ph) * (0.10 / k) * (i<2 ? 1.4 : 0.35); }
-      float e = 0.15; vec2 q = p*1.3 + vec2(0.0, t*0.25);
-      float n0 = fbm(q); g += vec2(fbm(q+vec2(e,0))-n0, fbm(q+vec2(0,e))-n0)/e * 0.012;
+      vec4 W[5];
+      W[0]=vec4( 0.00,1.0,0.42,0.55); W[1]=vec4( 0.25,1.0,0.80,0.80); W[2]=vec4(-0.30,1.0,1.30,1.05);
+      W[3]=vec4( 0.45,1.0,2.40,1.45); W[4]=vec4(-0.40,1.0,3.60,1.80);
+      float amp[5]; amp[0]=0.14; amp[1]=0.09; amp[2]=0.05; amp[3]=0.022; amp[4]=0.012;
+      crest = 0.0;
+      for(int i=0;i<5;i++){ vec2 d = normalize(W[i].xy); float k = W[i].z;
+        float ph = dot(p,d)*k - t*W[i].w;
+        g += d * cos(ph) * amp[i];
+        if(i==0) crest = sin(ph);
+      }
+      // fine isotropic ripples in two crossing directions (break the moon path into soft patches)
+      float e = 0.06;
+      vec2 q1 = p*2.2 + vec2(0.0, -t*0.35), q2 = p*3.7 + vec2(t*0.22, -t*0.28);
+      float a0 = vn(q1), b0 = vn(q2);
+      g += vec2(vn(q1+vec2(e,0))-a0, vn(q1+vec2(0,e))-a0)/e * 0.032;
+      g += vec2(vn(q2+vec2(e,0))-b0, vn(q2+vec2(0,e))-b0)/e * 0.012;
       return g;
     }
     void main(){
       vec3 toC = cameraPosition - vW; float d = length(toC); vec3 V = toC/d;
-      float lod = 1.0 / (1.0 + d*0.03);
-      vec2 g = wgrad(vW.xz, uTime) * (0.55 + 0.45*lod);
+      float lod = 1.0 / (1.0 + d*0.025);
+      float crest;
+      vec2 g = wgrad(vW.xz, uTime, crest) * (0.6 + 0.4*lod);
       vec3 N = normalize(vec3(-g.x, 1.0, -g.y));
       vec3 R = reflect(-V, N);
-      float fres = 0.02 + 0.98*pow(1.0 - max(dot(N,V),0.0), 5.0);
-      vec3 col = vec3(0.002,0.0035,0.0045) + vec3(0.004,0.007,0.009)*fres;
+      float ndv = max(dot(N,V),0.0);
+      float fres = 0.02 + 0.98*pow(1.0 - ndv, 5.0);
+      fres = min(fres, 0.35);                                       // never a mirror at grazing angles
+      // dark blue-green body; the black night sky reflects only faintly
+      vec3 body = vec3(0.0025,0.0065,0.0070);
+      vec3 col = body*(1.0-fres) + vec3(0.003,0.005,0.007)*fres;
       for(int i=0;i<2;i++){
         vec3 L = i==0 ? uLA : uLB; vec3 C = i==0 ? uCA : uCB;
         float c = max(dot(R,L),0.0);
-        float sz = i==0 ? 1.0 : 0.55;
-        col += C * (pow(c, 160.0/sz)*0.9 + pow(c, 40.0/sz)*0.35 + pow(c, 10.0)*0.02) * (0.4 + fres*1.5);
+        float sz = i==0 ? 1.0 : 0.6;
+        // soft broken moon path: medium-tight lobe on rippled normals, no broad sheen lobe
+        col += C * (pow(c, 260.0/sz)*1.6 + pow(c, 60.0/sz)*0.08 + pow(c, 110.0/sz)*0.6*(1.0-lod)) * (0.25 + fres*1.2);
+        // crests of the main swell catch the moons a little (moves toward the shore with the swell)
+        float cr = pow(max(crest,0.0), 6.0);
+        col += C * cr * pow(c, 18.0) * 0.012;
       }
-      // shallow edge: fade into the wet sand, faint foam
+      // shoreline: water thins out over the sand, soft foam where the swash meets the beach
       float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
       float line = uShore + 1.2 + swell + (fbm(vec2(vW.x*0.35, uTime*0.05))-0.5)*1.4;
       float a = smoothstep(line - 0.2, line - 1.8, vW.z);
-      // b3: a soft rolling surf crest that travels in toward the beach and dissolves at the swash
-      float ph = fract(uTime*0.054);
-      float cz = line - 9.0 + ph*8.5;
-      float band = exp(-pow((vW.z - cz)/0.7, 2.0)) * smoothstep(0.0, 0.25, ph) * (1.0 - smoothstep(0.75, 1.0, ph));
-      float fn2 = smoothstep(0.35, 0.75, fbm(vec2(vW.x*0.9, vW.z*1.6 - uTime*0.4)));
-      col += band * (0.35 + 0.65*fn2) * (uCA*0.05 + uCB*0.03) * (1.0 - smoothstep(150.0, 900.0, d));
-      col += band * (uCA*0.012 + uCB*0.008);  // crest catches both moons softly
+      float toShore = line - vW.z;                                  // metres seaward of the swash line
+      // breaking crests: only where the main swell crest is, within the last ~8 m, carried by the swell phase
+      float br = smoothstep(9.0, 2.5, toShore) * smoothstep(0.0, 1.0, toShore);
+      float fo = smoothstep(0.82, 0.98, crest) * br;
+      float fn2 = smoothstep(0.3, 0.75, fbm(vec2(vW.x*1.1, vW.z*2.3) + vec2(0.0, -uTime*0.3)));
+      col += fo * fn2 * (uCA*0.035 + uCB*0.018);
       float hz = smoothstep(150.0, 900.0, d);
       col = mix(col, vec3(0.0), hz*0.9);
       gl_FragColor = vec4(col, a);
