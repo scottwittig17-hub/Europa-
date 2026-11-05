@@ -4,7 +4,7 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
-const BUILD = 'Beach b9';
+const BUILD = 'Beach b10';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -584,6 +584,22 @@ addEventListener('pointermove', e => {
   yaw -= (e.clientX - px) * 0.0032; pitch -= (e.clientY - py) * 0.0028;
   pitch = THREE.MathUtils.clamp(pitch, -1.3, 1.45); px = e.clientX; py = e.clientY;
 });
+// b10: walkable area - stay >= 12 m from the cliff wall (wall R 32 around (0,-3) -> head within 20 m of that centre)
+// and no deeper than knee-depth past the waterline. Teleports land inside; walking out gets a soft ease-back.
+const WALK = { cx: 0, cz: -3, r: 32 - 12, minZ: SHORE_Z - 0.6 };
+function clampXZ(x, z) {
+  let dx = x - WALK.cx, dz = z - WALK.cz; const d = Math.hypot(dx, dz);
+  if (d > WALK.r) { dx *= WALK.r / d; dz *= WALK.r / d; }
+  return [WALK.cx + dx, Math.max(WALK.minZ, WALK.cz + dz)];
+}
+const _hw = new THREE.Vector3();
+function softBounds(dt) {
+  if (lying) return;
+  camera.getWorldPosition(_hw); const [x, z] = clampXZ(_hw.x, _hw.z);
+  const ex = x - _hw.x, ez = z - _hw.z; if (ex === 0 && ez === 0) return;
+  const k = 1 - Math.exp(-dt * 6);                            // ~0.4 s soft stop, no snap
+  rig.position.x += ex * k; rig.position.z += ez * k;
+}
 function selectRay(o, d) {
   raycaster.set(o, d);
   if (lying) { fadeThen(standUp); return; }                   // any click while lying = stand up
@@ -591,7 +607,8 @@ function selectRay(o, d) {
   const h = raycaster.intersectObject(sand, false)[0];        // click the sand = walk there
   if (h && h.distance < 25 && h.point.z > SHORE_Z + 0.5 && h.point.z < 14) fadeThen(() => {
     const head = new THREE.Vector3(); camera.getWorldPosition(head);
-    rig.position.x += h.point.x - head.x; rig.position.z += h.point.z - head.z; });
+    const [tx, tz] = clampXZ(h.point.x, h.point.z);           // b10: teleport target kept in the walkable area
+    rig.position.x += tx - head.x; rig.position.z += tz - head.z; });
 }
 
 /* ---------------------------------------------------------- input: XR */
@@ -658,6 +675,7 @@ renderer.setAnimationLoop(() => {
   const now = performance.now(); frames++;
   if (now - lastT > 500) { ema = ema * 0.6 + frames * 1000 / (now - lastT) * 0.4; fpsEl.textContent = `${ema.toFixed(0)} fps`; frames = 0; lastT = now; }
   const t = window.__beachTime ?? now * 0.001; U.uTime.value = t;
+  softBounds(Math.min(0.1, (now - (window.__lastFrame ?? now)) / 1000)); window.__lastFrame = now;
   if (!renderer.xr.isPresenting) { camera.rotation.set(0, 0, 0); camera.rotateY(yaw); camera.rotateX(pitch); }
   else pollPads();
   camera.getWorldPosition(_p); skyRig.position.copy(_p);
