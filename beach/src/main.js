@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-const BUILD = 'Beach b4';
+const BUILD = 'Beach b5';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -39,6 +39,29 @@ float h21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return
 float vn(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
   return mix(mix(h21(i),h21(i+vec2(1,0)),f.x), mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x), f.y); }
 float fbm(vec2 p){ float a=0.5, s=0.0; for(int i=0;i<4;i++){ s+=a*vn(p); p=p*2.03+17.1; a*=0.5; } return s; }`;
+
+const NOISE2 = `
+// b5: grid-free noise for sand + water (simplex; Hoskins hash; rotated octaves) - no tile seams, no hash columns
+float hh12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*0.1031); p3 += dot(p3, p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+vec2 hh22(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*vec3(0.1031,0.1030,0.0973)); p3 += dot(p3, p3.yzx+33.33); return fract((p3.xx+p3.yz)*p3.zy); }
+vec3 sperm(vec3 x){ return mod(((x*34.0)+1.0)*x, 289.0); }
+float snoise(vec2 v){
+  const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+  vec2 i = floor(v + dot(v, C.yy)); vec2 x0 = v - i + dot(i, C.xx);
+  vec2 i1 = (x0.x > x0.y) ? vec2(1.0,0.0) : vec2(0.0,1.0);
+  vec4 x12 = x0.xyxy + C.xxzz; x12.xy -= i1; i = mod(i, 289.0);
+  vec3 p = sperm(sperm(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0); m = m*m; m = m*m;
+  vec3 x = 2.0*fract(p*C.www) - 1.0; vec3 h = abs(x) - 0.5; vec3 ox = floor(x + 0.5); vec3 a0 = x - ox;
+  m *= 1.79284291400159 - 0.85373472095314*(a0*a0 + h*h);
+  vec3 g; g.x = a0.x*x0.x + h.x*x0.y; g.yz = a0.yz*x12.xz + h.yz*x12.yw;
+  return 130.0*dot(m, g);   // -1..1
+}
+const mat2 ROT = mat2(0.80, 0.60, -0.60, 0.80);
+float sfbm(vec2 p){ float a=0.5, s=0.0; for(int i=0;i<4;i++){ s+=a*snoise(p); p=ROT*p*2.07+vec2(5.3,1.7); a*=0.5; } return 0.5+0.5*s; }
+// band-limited: drop octaves whose wavelength is below the pixel footprint (no aliasing at headset res)
+float sfbmAA(vec2 p, float fw){ float a=0.5, s=0.0, f=1.0; for(int i=0;i<5;i++){ float k = 1.0 - smoothstep(0.25, 0.6, f*fw); s+=a*snoise(p)*k; p=ROT*p*2.07+vec2(5.3,1.7); a*=0.5; f*=2.07; } return 0.5+0.5*s; }
+`;
 const moonUniforms = {
   uLA: { value: MOON_A.dir }, uCA: { value: new THREE.Vector3(...MOON_A.color.toArray()) },
   uLB: { value: MOON_B.dir }, uCB: { value: new THREE.Vector3(...MOON_B.color.toArray()) },
@@ -67,7 +90,18 @@ function sandH(x, z) {   // gentle real dunes of the beach (meters)
   const k = Math.min(1, Math.max(0, (Math.hypot(x - 0.0, (z + 3.15) * 1.2) - 2.6) / 3));   // flat bed under the blanket
   return k * (0.05 * (vnoise(x * 0.25, z * 0.25) - 0.5) + 0.015 * (vnoise(x * 1.3, z * 1.3) - 0.5));
 }
-function blanketY(x, z) { return sandH(x, z); }   // blanket removed in b2: just the (flattened) sand
+// b5: creme 'Sparks and Static' blanket back on the flattened bed
+function blanketLift(x, z) {
+  const ex = Math.min(x - BL.x0, BL.x1 - x), ez = Math.min(z - BL.z0, BL.z1 - z), e = Math.max(0, Math.min(ex, ez));
+  let h = 0.006 + 0.008 * vnoise(x * 2.2 + 3, z * 2.2) + 0.004 * vnoise(x * 7, z * 7 + 2);
+  h += 0.012 * Math.exp(-Math.pow((x * 0.6 + z * 0.8 + 1.4) / 0.06, 2)) * vnoise(x * 1.5, z);   // one soft rumple
+  const edge = Math.min(1, e / 0.15);
+  return h * (0.3 + 0.7 * edge) + (1 - edge) * 0.01 * vnoise(x * 4 + 9, z * 4);
+}
+function blanketY(x, z) {
+  const inside = x > BL.x0 - 0.05 && x < BL.x1 + 0.05 && z > BL.z0 - 0.05 && z < BL.z1 + 0.05;
+  return sandH(x, z) + (inside ? blanketLift(x, z) : 0);
+}
 
 /* ---------------------------------------------------------- sand */
 const sandMat = new THREE.ShaderMaterial({
@@ -79,49 +113,58 @@ const sandMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform float uTime, uShore; uniform vec3 uLA,uCA,uLB,uCB; uniform vec4 uBL; varying vec3 vW;
     ${NOISE}
+    ${NOISE2}
     void main(){
       vec2 p = vW.xz;
       float d = length(vW - cameraPosition);
-      // b4: matte volcanic sand. Isotropic wind ripples (no long brushed streaks) + fine grain.
-      float fd = 1.0 - smoothstep(4.0, 30.0, d);          // micro detail fades out before it can alias
-      float fg = 1.0 - smoothstep(2.0, 12.0, d);
-      float warp = fbm(p*0.6)*6.0;
-      vec2 rd = normalize(vec2(0.35, 1.0));
-      float rp = dot(p, rd)*14.0 + warp;                   // ripple crest phase
-      vec2 rg = rd*14.0*cos(rp)*0.5*(0.5+0.5*vn(p*0.4));
-      float e = 0.01;
-      float g0 = vn(p*90.0), gx = vn((p+vec2(e,0))*90.0), gz = vn((p+vec2(0,e))*90.0);
-      vec2 gg = vec2(gx-g0, gz-g0)/e;
-      vec3 N = normalize(vec3(-(rg.x*0.004*fd + gg.x*0.0035*fg), 1.0, -(rg.y*0.004*fd + gg.y*0.0035*fg)));
+      // b5: continuous grainy sand from simplex noise, band-limited by the pixel footprint.
+      float fw = length(fwidth(p));                         // metres per pixel here
       vec3 V = normalize(cameraPosition - vW);
+      float warp = sfbm(p*0.5)*5.0;
+      vec2 rd = normalize(vec2(0.35, 1.0));
+      float rp = dot(p, rd)*11.0 + warp;                    // soft wind ripples (wavelength ~57 cm)
+      float rk = 1.0 - smoothstep(0.03, 0.12, fw);          // fade ripples before they alias
+      vec2 rg = rd*11.0*cos(rp)*(0.4+0.6*sfbm(p*0.35))*rk;
+      // grain normal from two simplex scales via central differences, faded by footprint
+      float e = 0.004;
+      float gA = 1.0 - smoothstep(0.004, 0.012, fw), gB = 1.0 - smoothstep(0.012, 0.035, fw);
+      vec2 q = ROT*p;
+      float n1x = snoise((q+vec2(e,0))*120.0) - snoise((q-vec2(e,0))*120.0), n1z = snoise((q+vec2(0,e))*120.0) - snoise((q-vec2(0,e))*120.0);
+      float n2x = snoise((p+vec2(e,0))*35.0) - snoise((p-vec2(e,0))*35.0), n2z = snoise((p+vec2(0,e))*35.0) - snoise((p-vec2(0,e))*35.0);
+      vec2 gg = vec2(n1x, n1z)/(2.0*e)*0.0012*gA + vec2(n2x, n2z)/(2.0*e)*0.0025*gB;
+      vec3 N = normalize(vec3(-(rg.x*0.004 + gg.x), 1.0, -(rg.y*0.004 + gg.y)));
       // swash: the waterline breathes in and out
       float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
-      float line = uShore + 1.2 + swell + (fbm(vec2(p.x*0.35, uTime*0.05))-0.5)*1.4;
-      float wet = smoothstep(line + 3.0, line - 0.3, p.y);          // z grows toward the beach
-      float sheet = smoothstep(line + 0.05, line - 0.6, p.y);        // thin water sheet
-      // albedo: dark basalt grains, salt-and-pepper at several scales (visible up close), darker when wet
-      float grain = vn(p*220.0)*0.55 + vn(p*70.0)*0.3 + h21(floor(p*400.0))*0.15;
-      grain = mix(0.5, grain, fg);
-      vec3 base = vec3(0.016,0.015,0.015) * (0.55 + 0.9*grain) * (0.85 + 0.3*fbm(p*0.7));
+      float line = uShore + 1.2 + swell + (sfbm(vec2(p.x*0.3, uTime*0.04))-0.5)*1.4;
+      float wet = smoothstep(line + 3.0, line - 0.3, p.y);
+      float sheet = smoothstep(line + 0.05, line - 0.6, p.y);
+      // albedo: salt-and-pepper basalt grains; detail averages to mid-grey with distance (no shimmer)
+      float grain = mix(0.5, 0.5+0.5*snoise(q*260.0), 1.0 - smoothstep(0.002, 0.006, fw))*0.5
+                  + mix(0.5, 0.5+0.5*snoise(p*80.0), 1.0 - smoothstep(0.006, 0.02, fw))*0.3
+                  + sfbmAA(p*9.0, fw*9.0)*0.2;
+      vec3 base = vec3(0.016,0.015,0.015) * (0.5 + 1.0*grain) * (0.85 + 0.3*sfbm(p*0.6));
       base = mix(base, base*0.4, wet);
       vec3 col = vec3(0.0);
       for(int i=0;i<2;i++){
         vec3 L = i==0 ? uLA : uLB; vec3 C = i==0 ? uCA : uCB * 0.6;
         float ndl = max(dot(N,L),0.0);
-        col += base * C * (0.3 + ndl*1.4);                     // Lambert only: no dry specular at all
+        col += base * C * (0.3 + ndl*1.4);
         vec3 H = normalize(L+V);
-        // gentle wet sheen only on the wet band / thin water sheet
-        col += C * pow(max(dot(N,H),0.0), 60.0) * 0.03 * wet * (0.3 + sheet);
-        // sparse soft mineral glints (~12% of b1), moon-facing only
-        vec2 cell = floor(p*320.0);
-        float rr = h21(cell + float(i)*31.7);
-        vec3 fn = normalize(vec3(h21(cell+3.1)-0.5, 1.4, h21(cell+7.7)-0.5));
-        col += C * pow(max(dot(fn,H),0.0), 120.0) * step(0.99, rr) * 0.16 * fd * (1.0 - wet*0.8);
+        col += C * pow(max(dot(N,H),0.0), 60.0) * 0.025 * wet * (0.3 + sheet);
+        // sparse soft glints: rotated + jittered cells, tiny round dots, footprint + distance faded
+        vec2 gp = (ROT*ROT*p + float(i)*vec2(17.3, 5.1)) * 160.0;
+        vec2 cid = floor(gp), cf = fract(gp) - 0.5;
+        vec2 jit = hh22(cid + 41.0) - 0.5;
+        float dot_ = smoothstep(0.16, 0.04, length(cf - jit*0.6));
+        float pick = step(0.985, hh12(cid*1.37 + 7.0));
+        vec3 fn = normalize(vec3(hh12(cid+3.1)-0.5, 1.4, hh12(cid+7.7)-0.5));
+        float vis = (1.0 - smoothstep(0.002, 0.005, fw)) * (1.0 - smoothstep(3.0, 9.0, d));
+        col += C * pow(max(dot(fn,H),0.0), 80.0) * pick * dot_ * 0.22 * vis * (1.0 - wet*0.8);
       }
       col += vec3(0.002,0.0026,0.003);
       // foam line at the swash edge
       float fl = abs(p.y - line);
-      float foam = smoothstep(0.45, 0.0, fl) * smoothstep(0.45, 0.8, fbm(vec2(p.x*1.3, p.y*2.0 - uTime*0.3)));
+      float foam = smoothstep(0.45, 0.0, fl) * smoothstep(0.45, 0.8, sfbm(vec2(p.x*1.3, p.y*2.0 - uTime*0.3)));
       col += foam * (uCA*0.06 + uCB*0.03);
       col = mix(col, vec3(0.0), smoothstep(80.0, 400.0, d));
       gl_FragColor = vec4(col, 1.0);
@@ -144,9 +187,10 @@ const waterMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform float uTime, uShore; uniform vec3 uLA,uCA,uLB,uCB; varying vec3 vW;
     ${NOISE}
+    ${NOISE2}
     // b4: every swell travels TOWARD the shore (+Z), within +-25 deg of the shore normal.
     // phase = dot(p,d)*k - w*t  -> crests move along +d.
-    vec2 wgrad(vec2 p, float t, out float crest){
+    vec2 wgrad(vec2 p, float t, float fw, out float crest){
       vec2 g = vec2(0.0);
       vec4 W[5];
       W[0]=vec4( 0.00,1.0,0.42,0.55); W[1]=vec4( 0.25,1.0,0.80,0.80); W[2]=vec4(-0.30,1.0,1.30,1.05);
@@ -155,22 +199,25 @@ const waterMat = new THREE.ShaderMaterial({
       crest = 0.0;
       for(int i=0;i<5;i++){ vec2 d = normalize(W[i].xy); float k = W[i].z;
         float ph = dot(p,d)*k - t*W[i].w;
-        g += d * cos(ph) * amp[i];
+        g += d * cos(ph) * amp[i] * (1.0 - smoothstep(0.15, 0.5, k*fw/6.2832));   // footprint fade
         if(i==0) crest = sin(ph);
       }
-      // fine isotropic ripples in two crossing directions (break the moon path into soft patches)
-      float e = 0.06;
-      vec2 q1 = p*2.2 + vec2(0.0, -t*0.35), q2 = p*3.7 + vec2(t*0.22, -t*0.28);
-      float a0 = vn(q1), b0 = vn(q2);
-      g += vec2(vn(q1+vec2(e,0))-a0, vn(q1+vec2(0,e))-a0)/e * 0.032;
-      g += vec2(vn(q2+vec2(e,0))-b0, vn(q2+vec2(0,e))-b0)/e * 0.012;
+      // fine ripples: simplex (no grid), two crossing drifts toward shore, faded by pixel footprint
+      float e = 0.05;
+      vec2 q1 = ROT*p*1.8 + vec2(0.0, -t*0.30), q2 = ROT*ROT*p*3.4 + vec2(t*0.15, -t*0.25);
+      float f1 = 1.0 - smoothstep(0.08, 0.3, fw*1.8), f2 = 1.0 - smoothstep(0.08, 0.3, fw*3.4);
+      g += vec2(snoise(q1+vec2(e,0))-snoise(q1-vec2(e,0)), snoise(q1+vec2(0,e))-snoise(q1-vec2(0,e)))/(2.0*e) * 0.020 * f1;
+      g += vec2(snoise(q2+vec2(e,0))-snoise(q2-vec2(e,0)), snoise(q2+vec2(0,e))-snoise(q2-vec2(0,e)))/(2.0*e) * 0.008 * f2;
       return g;
     }
     void main(){
       vec3 toC = cameraPosition - vW; float d = length(toC); vec3 V = toC/d;
       float lod = 1.0 / (1.0 + d*0.025);
+      float fw = length(fwidth(vW.xz));
       float crest;
-      vec2 g = wgrad(vW.xz, uTime, crest) * (0.6 + 0.4*lod);
+      vec2 g = wgrad(vW.xz, uTime, fw, crest);
+      // lost (filtered-out) slope variance becomes roughness, so the far moon path widens softly instead of banding
+      float rough = clamp(fw*1.5, 0.0, 1.0);
       vec3 N = normalize(vec3(-g.x, 1.0, -g.y));
       vec3 R = reflect(-V, N);
       float ndv = max(dot(N,V),0.0);
@@ -184,20 +231,21 @@ const waterMat = new THREE.ShaderMaterial({
         float c = max(dot(R,L),0.0);
         float sz = i==0 ? 1.0 : 0.6;
         // soft broken moon path: medium-tight lobe on rippled normals, no broad sheen lobe
-        col += C * (pow(c, 260.0/sz)*1.6 + pow(c, 60.0/sz)*0.08 + pow(c, 110.0/sz)*0.6*(1.0-lod)) * (0.25 + fres*1.2);
+        float ex = mix(260.0, 45.0, rough)/sz;
+        col += C * (pow(c, ex)*mix(1.6, 0.35, rough) + pow(c, 60.0/sz)*0.06) * (0.25 + fres*1.2);
         // crests of the main swell catch the moons a little (moves toward the shore with the swell)
         float cr = pow(max(crest,0.0), 6.0);
         col += C * cr * pow(c, 18.0) * 0.012;
       }
       // shoreline: water thins out over the sand, soft foam where the swash meets the beach
       float swell = sin(uTime*0.34)*0.8 + sin(uTime*0.19+1.3)*0.45;
-      float line = uShore + 1.2 + swell + (fbm(vec2(vW.x*0.35, uTime*0.05))-0.5)*1.4;
+      float line = uShore + 1.2 + swell + (sfbm(vec2(vW.x*0.3, uTime*0.04))-0.5)*1.4;
       float a = smoothstep(line - 0.2, line - 1.8, vW.z);
       float toShore = line - vW.z;                                  // metres seaward of the swash line
       // breaking crests: only where the main swell crest is, within the last ~8 m, carried by the swell phase
       float br = smoothstep(9.0, 2.5, toShore) * smoothstep(0.0, 1.0, toShore);
       float fo = smoothstep(0.82, 0.98, crest) * br;
-      float fn2 = smoothstep(0.3, 0.75, fbm(vec2(vW.x*1.1, vW.z*2.3) + vec2(0.0, -uTime*0.3)));
+      float fn2 = smoothstep(0.3, 0.75, sfbm(vec2(vW.x*1.1, vW.z*2.3) + vec2(0.0, -uTime*0.3)));
       col += fo * fn2 * (uCA*0.035 + uCB*0.018);
       float hz = smoothstep(150.0, 900.0, d);
       col = mix(col, vec3(0.0), hz*0.9);
@@ -340,12 +388,31 @@ addCliff({ R: 19.5, arcDeg: 236, cz: -3 });
   }
 }
 
+/* ---------------------------------------------------------- blanket (b5: creme, 'Sparks and Static') */
+{
+  const tex = new THREE.TextureLoader().load('./assets/blanket.jpg'); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  const mat = new THREE.MeshStandardMaterial({ map: tex, color: new THREE.Color(0.60, 0.57, 0.53), roughness: 0.97, metalness: 0,
+    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const W = BL.x1 - BL.x0, L = BL.z1 - BL.z0;
+  const g = new THREE.PlaneGeometry(W, L, 120, 90); g.rotateX(-Math.PI / 2);
+  const pa = g.attributes.position;
+  for (let i = 0; i < pa.count; i++) {
+    let x = pa.getX(i) + bcx, z = pa.getZ(i) + bcz;
+    const ex = Math.min(x - BL.x0, BL.x1 - x), ez = Math.min(z - BL.z0, BL.z1 - z);
+    x += (vnoise(z * 1.5, 3) - 0.5) * 0.08 * Math.max(0, 1 - ex / 0.3) * Math.sign(x - bcx);
+    z += (vnoise(x * 1.5, 9) - 0.5) * 0.08 * Math.max(0, 1 - ez / 0.3) * Math.sign(z - bcz);
+    pa.setXYZ(i, x, blanketY(x, z), z);
+  }
+  g.computeVertexNormals();
+  const b = new THREE.Mesh(g, mat); b.receiveShadow = true; scene.add(b);
+}
+
 /* ---------------------------------------------------------- music player on the head edge */
 const ledMat = new THREE.MeshBasicMaterial({ color: 0x6fe0d0, toneMapped: false, transparent: true, opacity: 0.55 });
 {
   const g = new RoundedBoxGeometry(0.075, 0.011, 0.14, 4, 0.005);
   const m = new THREE.Mesh(g, new THREE.MeshPhysicalMaterial({ color: 0x0c0d0f, roughness: 0.55, metalness: 0.4, clearcoat: 0.3, clearcoatRoughness: 0.5 }));
-  const x = 0.75, z = -2.25; m.position.set(x, sandH(x, z) + 0.0055, z); m.rotation.y = 0.35;
+  const x = 0.55, z = -2.2; m.position.set(x, blanketY(x, z) + 0.006, z); m.rotation.y = 0.35;
   m.castShadow = true; scene.add(m);
   const led = new THREE.Mesh(new THREE.CircleGeometry(0.0022, 12).rotateX(-Math.PI / 2), ledMat);
   led.position.set(0.018, 0.0058, 0.05); m.add(led);
