@@ -4,7 +4,7 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
-const BUILD = 'Beach b7';
+const BUILD = 'Beach b8';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -260,6 +260,10 @@ water.position.set(0, -0.06, SHORE_Z - 750 + 3); scene.add(water);
 
 /* ---------------------------------------------------------- sky: stars + two moons (glued to the head) */
 const skyRig = new THREE.Group(); scene.add(skyRig);
+// b8: galaxy frame shared by the star mask and the galaxy quad (quad local axes in skyRig space)
+const GAL_DIR = dirFrom(42, 39), GAL_ROT = deg(-18), GAL_W = 16, GAL_ASPECT = 783 / 1400;
+const galFrame = new THREE.Object3D(); galFrame.position.copy(GAL_DIR); galFrame.lookAt(0, 0, 0); galFrame.rotateZ(GAL_ROT); galFrame.updateMatrix();
+const galX = new THREE.Vector3(), galY = new THREE.Vector3(), galZ = new THREE.Vector3(); galFrame.matrix.extractBasis(galX, galY, galZ);
 {
   const N = 9000, pos = new Float32Array(N * 3), mag = new Float32Array(N), col = new Float32Array(N * 3);
   let s = 3; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
@@ -274,13 +278,17 @@ const skyRig = new THREE.Group(); scene.add(skyRig);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('mag', new THREE.BufferAttribute(mag, 1)); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   const m = new THREE.ShaderMaterial({
-    uniforms: { uPx: { value: renderer.getPixelRatio() }, uLA: moonUniforms.uLA, uLB: moonUniforms.uLB },
+    uniforms: { uPx: { value: renderer.getPixelRatio() }, uLA: moonUniforms.uLA, uLB: moonUniforms.uLB,
+      uGX: { value: galX }, uGY: { value: galY }, uGN: { value: GAL_DIR.clone() },
+      uGH: { value: new THREE.Vector2(Math.tan(deg(GAL_W) / 2), Math.tan(deg(GAL_W) / 2) * GAL_ASPECT) } },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    vertexShader: `attribute float mag; attribute vec3 color; varying float vB; varying vec3 vC; uniform float uPx; uniform vec3 uLA, uLB;
+    vertexShader: `attribute float mag; attribute vec3 color; varying float vB; varying vec3 vC; uniform float uPx; uniform vec3 uLA, uLB, uGX, uGY, uGN; uniform vec2 uGH;
       void main(){ vec3 dir = normalize(position);
         float wash = smoothstep(0.93, 0.995, dot(dir,uLA))*0.85 + smoothstep(0.97, 0.998, dot(dir,uLB))*0.6;   // moonlight drowns nearby stars
         float hor = smoothstep(0.0, 0.12, dir.y);
-        vB = (0.18 + 1.6*mag) * hor * (1.0 - wash); vC = color;
+        float gd = dot(dir, uGN); vec2 gq = vec2(dot(dir, uGX), dot(dir, uGY)) / max(gd, 1e-3) / uGH;   // b8: stars behind the galaxy are hidden
+        float gal = gd > 0.0 ? smoothstep(1.05, 0.75, length(gq)) : 0.0;
+        vB = (0.18 + 1.6*mag) * hor * (1.0 - wash) * (1.0 - gal); vC = color;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
         gl_PointSize = (1.1 + 1.6*mag) * uPx; }`,
     fragmentShader: `varying float vB; varying vec3 vC;
@@ -327,11 +335,10 @@ makeMoon(MOON_B, 7.9, new THREE.Vector2(-0.55, 0.2));
 /* ---------------------------------------------------------- merging galaxies (sky-fixed, additive, no parallax) */
 {
   const gTex = new THREE.TextureLoader().load('./assets/galaxies.jpg'); gTex.colorSpace = THREE.SRGBColorSpace;
-  const D = 1350, w = 2 * D * Math.tan(deg(16) / 2), h = w * 783 / 1400;
+  const D = 1650, w = 2 * D * Math.tan(deg(GAL_W) / 2), h = w * GAL_ASPECT;   // b8: beyond the 1500 m star sphere, same angular size
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: gTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, color: new THREE.Color(0.55, 0.55, 0.55) }));
-  const GAL = dirFrom(42, 39);
-  m.position.copy(GAL).multiplyScalar(D); m.lookAt(0, 0, 0); m.rotateZ(deg(-18));
-  m.renderOrder = -6; m.frustumCulled = false; skyRig.add(m);
+  m.position.copy(GAL_DIR).multiplyScalar(D); m.lookAt(0, 0, 0); m.rotateZ(GAL_ROT);
+  m.renderOrder = -12; m.frustumCulled = false; skyRig.add(m);   // b8: drawn before (behind) the stars
 }
 
 /* ---------------------------------------------------------- cliffs: painted wall on curved panels behind + sides */
