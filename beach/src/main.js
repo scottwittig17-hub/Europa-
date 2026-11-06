@@ -6,7 +6,7 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MusicPlayer, createMusicPanel } from '../../core/music.js';   // b11: the submarine scene's music player + panel
 import { CanvasPanel, roundRect } from '../../core/panels.js';
 
-const BUILD = 'Beach b13';   // b10 walk limits + b11 radio music menu
+const BUILD = 'Beach b13f-sketch';   // b10 walk limits + b11 radio music menu
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -495,18 +495,57 @@ const kaiU = { uTime: U.uTime };
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
     m.scale.set(sx, 1, sy); m.castShadow = m.receiveShadow = true; kai.add(m); return m;
   };
-  // lying on her left side, facing -X (toward the lie spot), head at the cliff end, knees drawn up a little
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.105, 32, 24), skin);
-  head.position.set(1.02, 0.115, -2.5); head.scale.set(0.88, 1.0, 1.12); head.castShadow = true; kai.add(head);
-  caps([1.03, 0.11, -2.6], [1.03, 0.115, -2.66], 0.055);                 // neck
-  caps([1.05, 0.15, -2.74], [1.08, 0.145, -3.2], 0.135, 0.62, 1.05);     // torso, one soft piece
-  caps([1.04, 0.205, -2.74], [1.07, 0.19, -2.86], 0.07);                 // upper shoulder softens the top line
-  caps([1.03, 0.19, -3.28], [0.82, 0.18, -3.52], 0.085);                 // upper thigh
-  caps([0.82, 0.18, -3.52], [0.97, 0.15, -3.86], 0.062);                 // upper shin
-  caps([1.06, 0.09, -3.3], [0.86, 0.085, -3.58], 0.08);                  // lower thigh (on the blanket)
-  caps([0.86, 0.08, -3.58], [1.02, 0.07, -3.92], 0.058);                 // lower shin
-  caps([0.98, 0.20, -2.78], [0.84, 0.13, -2.98], 0.05);                  // upper arm, resting forward
-  caps([0.84, 0.13, -2.98], [0.74, 0.07, -2.72], 0.04);                  // forearm toward the radio (rounded end, no hand)
+  // WIP visual sketch, not a new approved build: side-lying feminine silhouette, sleeveless soft drape.
+  const dress = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.43, 0.30, 0.32), roughness: 0.94, metalness: 0 });
+  const hair = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.12, 0.048, 0.025), roughness: 0.7, metalness: 0 });
+  // Smooth loft: profile rows [z, x, y, x radius, y radius]. Shared rings avoid separate capsule joints.
+  const loft = (rows, material, rings = 64, sides = 32) => {
+    const path = new THREE.CatmullRomCurve3(rows.map(r => new THREE.Vector3(r[1], r[2], r[0])), false, 'catmullrom', 0.35);
+    const radii = new THREE.CatmullRomCurve3(rows.map(r => new THREE.Vector3(r[3], r[4], 0)), false, 'catmullrom', 0.25);
+    const pos = [], idx = [];
+    for (let j = 0; j <= rings; j++) {
+      const t = j / rings, c = path.getPoint(t), r = radii.getPoint(t);
+      for (let i = 0; i <= sides; i++) { const a = i / sides * Math.PI * 2;
+        pos.push(c.x + Math.max(0.001, r.x) * Math.cos(a), c.y + Math.max(0.001, r.y) * Math.sin(a), c.z); }
+    }
+    for (let j = 0; j < rings; j++) for (let i = 0; i < sides; i++) {
+      const a = j * (sides + 1) + i, b = a + sides + 1; idx.push(a, b, a+1, b, b+1, a+1);
+    }
+    let g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+    g = mergeVertices(g); g.computeVertexNormals();
+    const m = new THREE.Mesh(g, material); m.castShadow = m.receiveShadow = true; kai.add(m); return m;
+  };
+  // Neck and soft featureless face, turned toward Scott's lie spot (-X).
+  caps([1.01, 0.12, -2.57], [1.02, 0.13, -2.72], 0.047);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.106, 32, 24), skin);
+  head.position.set(1.0, 0.125, -2.5); head.scale.set(0.86, 1.02, 1.14); head.rotation.z = 0.12; head.castShadow = true; kai.add(head);
+  // A single flowing drape: narrow shoulder, gently defined waist, wider softly rounded hip, loose hem.
+  loft([
+    [-2.64,1.025,0.125,0.002,0.003], [-2.72,1.04,0.145,0.086,0.12],
+    [-2.83,1.05,0.15,0.105,0.145], [-2.99,1.07,0.135,0.068,0.112],
+    [-3.13,1.08,0.16,0.11,0.15], [-3.24,1.065,0.17,0.146,0.16],
+    [-3.37,0.99,0.145,0.145,0.13], [-3.48,0.92,0.12,0.136,0.103],
+    [-3.51,0.92,0.119,0.131,0.095], [-3.53,0.92,0.119,0.002,0.002]
+  ], dress);
+  // Exposed calves, gently bent; ends rounded, no modeled toes or hands.
+  caps([0.84, 0.145, -3.49], [0.98, 0.10, -3.86], 0.058);
+  caps([0.96, 0.075, -3.51], [1.10, 0.063, -3.94], 0.052);
+  // Relaxed arm folded in front, slender and softly joined.
+  caps([0.99, 0.235, -2.77], [0.83, 0.12, -2.99], 0.046);
+  caps([0.83, 0.12, -2.99], [0.76, 0.064, -2.75], 0.035);
+  const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.046, 20, 16), skin); elbow.position.set(0.83,0.12,-2.99); kai.add(elbow);
+  // Chestnut scalp over the back of the head; no facial features. Long hair pools on the blanket behind the shoulder.
+  const scalp = new THREE.Mesh(new THREE.SphereGeometry(0.108, 32, 24), hair);
+  scalp.position.set(1.045, 0.134, -2.505); scalp.scale.set(0.83,1.03,1.15); scalp.castShadow = true; kai.add(scalp);
+  loft([
+    [-2.44,1.095,0.105,0.002,0.002],[-2.54,1.13,0.104,0.086,0.082],
+    [-2.67,1.20,0.069,0.101,0.055],[-2.81,1.25,0.046,0.105,0.032],
+    [-2.97,1.23,0.032,0.088,0.018],[-3.10,1.18,0.026,0.002,0.002]
+  ], hair, 48, 24);
+  loft([
+    [-2.55,1.12,0.065,0.002,0.002],[-2.7,1.27,0.042,0.07,0.027],
+    [-2.9,1.32,0.025,0.056,0.015],[-3.04,1.29,0.022,0.002,0.002]
+  ], hair, 40, 20);
   kai.position.y = by + 0.012; scene.add(kai);
   // halo: cool cyan pool under/around her (ice-vein family), slow pulse; warm edge on the side toward the radio
   const hm = new THREE.ShaderMaterial({ uniforms: kaiU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -518,7 +557,7 @@ const kaiU = { uTime: U.uTime };
       vec3 cool = vec3(0.35, 0.85, 0.92);
       float warmSide = smoothstep(0.1, -0.9, vUv.x) * smoothstep(-0.2, 0.9, vUv.y);   // -X side, head end (toward the radio)
       vec3 c = mix(cool, vec3(1.0, 0.6, 0.3), warmSide * 0.55);
-      gl_FragColor = vec4(c * a * 0.11 * pulse, 1.0); }` });
+      gl_FragColor = vec4(c * a * 0.22 * pulse, 1.0); }` });
   const hx = 1.0, hz = -3.15, hg = new THREE.PlaneGeometry(1.1, 2.0, 16, 24); hg.rotateX(-Math.PI / 2);
   const ha = hg.attributes.position;
   for (let i = 0; i < ha.count; i++) { const x = ha.getX(i) + hx, z = ha.getZ(i) + hz; ha.setXYZ(i, x, blanketY(x, z) + 0.005, z); }
