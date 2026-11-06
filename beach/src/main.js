@@ -6,7 +6,7 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MusicPlayer, createMusicPanel } from '../../core/music.js';   // b11: the submarine scene's music player + panel
 import { CanvasPanel, roundRect } from '../../core/panels.js';
 
-const BUILD = 'Beach b13f-sketch';   // b10 walk limits + b11 radio music menu
+const BUILD = 'Beach b14';   // b10 walk limits + b11 radio music menu
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -495,9 +495,17 @@ const kaiU = { uTime: U.uTime };
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
     m.scale.set(sx, 1, sy); m.castShadow = m.receiveShadow = true; kai.add(m); return m;
   };
-  // WIP visual sketch, not a new approved build: side-lying feminine silhouette, sleeveless soft drape.
-  const dress = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.43, 0.30, 0.32), roughness: 0.94, metalness: 0 });
-  const hair = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.12, 0.048, 0.025), roughness: 0.7, metalness: 0 });
+  // b14 headset candidate: side-lying feminine silhouette, sleeveless soft drape.
+  const dress = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.72, 0.44, 0.46), roughness: 0.94, metalness: 0, emissive: new THREE.Color(0.025, 0.010, 0.012) });
+  const hair = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.12, 0.048, 0.025), roughness: 0.82, metalness: 0 });
+  // Fine low-contrast strand shading, not a smooth sculpted slab; no extra light or pass.
+  hair.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vHair;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvHair = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vHair;').replace('#include <color_fragment>', `#include <color_fragment>
+      float strand = sin(vHair.x * 440.0 + sin(vHair.z * 21.0) * 1.6);
+      float fade = 1.0 - smoothstep(0.6, 2.2, fwidth(vHair.x * 440.0));
+      diffuseColor.rgb *= 0.92 + 0.08 * strand * fade;`);
+  };
   // Smooth loft: profile rows [z, x, y, x radius, y radius]. Shared rings avoid separate capsule joints.
   const loft = (rows, material, rings = 64, sides = 32) => {
     const path = new THREE.CatmullRomCurve3(rows.map(r => new THREE.Vector3(r[1], r[2], r[0])), false, 'catmullrom', 0.35);
@@ -537,15 +545,20 @@ const kaiU = { uTime: U.uTime };
   // Chestnut scalp over the back of the head; no facial features. Long hair pools on the blanket behind the shoulder.
   const scalp = new THREE.Mesh(new THREE.SphereGeometry(0.108, 32, 24), hair);
   scalp.position.set(1.045, 0.134, -2.505); scalp.scale.set(0.83,1.03,1.15); scalp.castShadow = true; kai.add(scalp);
-  loft([
-    [-2.44,1.095,0.105,0.002,0.002],[-2.54,1.13,0.104,0.086,0.082],
-    [-2.67,1.20,0.069,0.101,0.055],[-2.81,1.25,0.046,0.105,0.032],
-    [-2.97,1.23,0.032,0.088,0.018],[-3.10,1.18,0.026,0.002,0.002]
-  ], hair, 48, 24);
-  loft([
-    [-2.55,1.12,0.065,0.002,0.002],[-2.7,1.27,0.042,0.07,0.027],
-    [-2.9,1.32,0.025,0.056,0.015],[-3.04,1.29,0.022,0.002,0.002]
-  ], hair, 40, 20);
+  // Several narrow, flattening locks settle separately on the blanket; uneven soft tips replace the rigid two-lobed hair slab.
+  for (let k = 0; k < 8; k++) {
+    const offset = (k - 3.5) * 0.018, wave = Math.sin(k * 1.9), len = 0.47 + 0.10 * Math.sin(k * 1.3 + 0.5);
+    const start = -2.49 + 0.026 * Math.cos(k), end = start - len;
+    const side = 1.17 + offset, tip = side + 0.022 * Math.sin(k * 2.4);
+    loft([
+      [start + 0.055,1.085 + offset * 0.45,0.13,0.002,0.002],
+      [start,1.10 + offset * 0.6,0.117,0.025,0.029],
+      [start - 0.13,side + 0.018 * wave,0.066,0.027,0.022],
+      [start - 0.27,side + 0.056 + 0.016 * wave,0.031,0.027,0.012],
+      [end + 0.065,tip + 0.04,0.022,0.018,0.007],
+      [end,tip + 0.024,0.02,0.001,0.001]
+    ], hair, 40, 12);
+  }
   kai.position.y = by + 0.012; scene.add(kai);
   // halo: cool cyan pool under/around her (ice-vein family), slow pulse; warm edge on the side toward the radio
   const hm = new THREE.ShaderMaterial({ uniforms: kaiU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
