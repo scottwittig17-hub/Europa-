@@ -3,8 +3,10 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MusicPlayer, createMusicPanel } from '../../core/music.js';   // b11: the submarine scene's music player + panel
+import { CanvasPanel, roundRect } from '../../core/panels.js';
 
-const BUILD = 'Beach b10';
+const BUILD = 'Beach b12';   // b10 walk limits + b11 radio music menu
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -430,24 +432,26 @@ addCliff({ R: 32, arcDeg: 236, cz: -3 });   // b9: pushed back from 19.5 m; heig
 }
 
 /* ---------------------------------------------------------- music player on the head edge */
+const radioHit = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, 0.26), new THREE.MeshBasicMaterial({ visible: false }));
 const ledMat = new THREE.MeshBasicMaterial({ color: 0x6fe0d0, toneMapped: false, transparent: true, opacity: 0.55 });
 {
   const g = new RoundedBoxGeometry(0.075, 0.011, 0.14, 4, 0.005);
   const m = new THREE.Mesh(g, new THREE.MeshPhysicalMaterial({ color: 0x0c0d0f, roughness: 0.55, metalness: 0.4, clearcoat: 0.3, clearcoatRoughness: 0.5 }));
   const x = 0.55, z = -2.2; m.position.set(x, blanketY(x, z) + 0.006, z); m.rotation.y = 0.35;
   m.castShadow = true; scene.add(m);
+  radioHit.position.copy(m.position); radioHit.position.y += 0.03; scene.add(radioHit);   // b11: generous invisible click target
   const led = new THREE.Mesh(new THREE.CircleGeometry(0.0022, 12).rotateX(-Math.PI / 2), ledMat);
   led.position.set(0.018, 0.0058, 0.05); m.add(led);
 }
 
 /* ---------------------------------------------------------- b6: warm radio glow (fake additive patch, slow pulse) */
-const glowU = { uTime: U.uTime };
+const glowU = { uTime: U.uTime, uLevel: { value: 0 } };   // b11: uLevel = music loudness (0 when silent)
 {
   const gm = new THREE.ShaderMaterial({ uniforms: glowU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv*2.0-1.0; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-    fragmentShader: `uniform float uTime; varying vec2 vUv; void main(){ float r = length(vUv);
-      float a = exp(-r*r*5.0) * smoothstep(1.0, 0.7, r);
+    fragmentShader: `uniform float uTime, uLevel; varying vec2 vUv; void main(){ float r = length(vUv);
+      float a = (1.0 + 0.7*uLevel) * exp(-r*r*5.0) * smoothstep(1.0, 0.7, r);
       float pulse = 0.86 + 0.08*sin(uTime*0.9) + 0.06*sin(uTime*2.3 + 1.7);
       gl_FragColor = vec4(vec3(1.0,0.55,0.22)*a*0.12*pulse, 1.0); }` });
   const gx = 0.55, gz = -2.2, gs = 1.3, gg = new THREE.PlaneGeometry(gs, gs, 24, 24); gg.rotateX(-Math.PI / 2);
@@ -537,6 +541,55 @@ function tickAudio(t) {   // slow swells: each voice rises as the swash comes in
   if (now > audio.nextCall) { distantCall(); audio.nextCall = now + 25 + Math.random() * 35; }
 }
 
+/* ---------------------------------------------------------- b11: radio music menu (same player/panel as the submarine scene) */
+const PLACEHOLDER_TRACKS = [
+  { name: 'Under the Ice', url: '../assets/music/under-the-ice.mp3', placeholder: true },
+  { name: 'Vent Pulse', url: '../assets/music/vent-pulse.mp3', placeholder: true },
+];
+const player = new MusicPlayer({ tracks: PLACEHOLDER_TRACKS, volume: 0.5 });
+const musicPanel = createMusicPanel(player, { width: 0.62, height: 0.4, theme: { moon: '#f1e9d8', inkSoft: '#a9b8b8', accent: '#f0b878', error: '#f0a58a' } });
+musicPanel.mesh.visible = false; musicPanel.mesh.scale.setScalar(0.5 / 0.62); scene.add(musicPanel.mesh);   // drawn at the sub's 0.62 m layout, shown 0.5 m wide
+const closeBtn = new CanvasPanel(0.05, 0.05, 1400, (ctx, p) => {
+  const W = ctx.lw; ctx.fillStyle = p.hover === 'close' ? 'rgba(95,230,236,.3)' : 'rgba(7,11,20,.8)'; roundRect(ctx, 0, 0, W, W, W / 2); ctx.fill();
+  ctx.strokeStyle = '#f1e9d8'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.beginPath();
+  ctx.moveTo(W * .32, W * .32); ctx.lineTo(W * .68, W * .68); ctx.moveTo(W * .68, W * .32); ctx.lineTo(W * .32, W * .68); ctx.stroke();
+  p.regions.push({ id: 'close', x: 0, y: 0, w: W, h: W }); });
+closeBtn.mesh.position.set(0.31 - 0.012, 0.2 - 0.012, 0.004); musicPanel.mesh.add(closeBtn.mesh);
+closeBtn.onPress = () => toggleMenu(false);
+const fileIn = document.createElement('input'); fileIn.type = 'file'; fileIn.accept = 'audio/*'; fileIn.multiple = true; fileIn.style.display = 'none'; document.body.appendChild(fileIn);
+fileIn.addEventListener('change', () => { const f = [...fileIn.files]; if (f.length) player.addTracks(f.map(x => ({ name: x.name.replace(/\.[^.]+$/, ''), url: URL.createObjectURL(x) }))); fileIn.value = ''; });
+// '+ Add': a file picker can't open inside a Quest immersive session, so in VR it ends the session (like the sub scene); pick, then Enter VR again.
+musicPanel.setOnAdd(() => { if (renderer.xr.isPresenting) renderer.xr.getSession()?.end(); else fileIn.click(); });
+let analyser = null, levelBuf = null;
+player.onChange(() => {                       // route the music through the scene's AudioContext once, for the glow level
+  if (!player.playing || analyser) return; startAudio(); const ctx = audio.ctx;
+  const src = ctx.createMediaElementSource(player.audio); analyser = ctx.createAnalyser(); analyser.fftSize = 256; levelBuf = new Uint8Array(analyser.fftSize);
+  src.connect(analyser); analyser.connect(ctx.destination);
+});
+function musicLevel() {
+  if (!analyser || !player.playing) return 0; analyser.getByteTimeDomainData(levelBuf);
+  let e = 0; for (let i = 0; i < levelBuf.length; i++) { const v = (levelBuf[i] - 128) / 128; e += v * v; } return Math.min(1, Math.sqrt(e / levelBuf.length) * 4);
+}
+const _mh = new THREE.Vector3(), _md = new THREE.Vector3(), _rp = new THREE.Vector3();
+function toggleMenu(open = !musicPanel.mesh.visible) {
+  musicPanel.mesh.visible = open; if (!open) return;
+  if (!renderer.xr.isPresenting) { camera.rotation.set(0, 0, 0); camera.rotateY(yaw); camera.rotateX(pitch); }
+  rig.updateMatrixWorld(true); camera.getWorldPosition(_mh); camera.getWorldDirection(_md);
+  if (!lying) { radioHit.getWorldPosition(_rp); _rp.y = _mh.y; const toR = _rp.sub(_mh).normalize(); _md.y = 0; _md.normalize().lerp(toR, 0.5).normalize(); _md.y = -0.35; _md.normalize(); }
+  musicPanel.mesh.position.copy(_mh).addScaledVector(_md, 0.85);
+  musicPanel.mesh.up.set(0, 1, 0); if (lying && renderer.xr.isPresenting) musicPanel.mesh.up.set(0, 1, 0).applyQuaternion(rig.quaternion);
+  musicPanel.mesh.lookAt(_mh); musicPanel.dirty = true;
+}
+const _uiTargets = [closeBtn.mesh, musicPanel.mesh];
+function menuRay() {                            // returns true when the ray was used by the music UI
+  if (musicPanel.mesh.visible) {
+    const h = raycaster.intersectObjects(_uiTargets, false)[0];
+    if (h) { const P = h.object.userData.panel, r = P.hit(h.uv); if (r) P.press(r.id); return true; }
+  }
+  if (raycaster.intersectObject(radioHit, false)[0]) { toggleMenu(); return true; }
+  return false;
+}
+
 /* ---------------------------------------------------------- lying down / standing */
 let yaw = 0, pitch = 0, lying = false;
 const fadeEl = document.getElementById('fade');
@@ -602,6 +655,7 @@ function softBounds(dt) {
 }
 function selectRay(o, d) {
   raycaster.set(o, d);
+  if (menuRay()) return;                                       // b11: music menu / radio first
   if (lying) { fadeThen(standUp); return; }                   // any click while lying = stand up
   if (raycaster.intersectObject(hitPad, false)[0]) { fadeThen(lieDown); return; }
   const h = raycaster.intersectObject(sand, false)[0];        // click the sand = walk there
@@ -680,6 +734,8 @@ renderer.setAnimationLoop(() => {
   else pollPads();
   camera.getWorldPosition(_p); skyRig.position.copy(_p);
   ledMat.opacity = 0.55 + 0.35 * Math.sin(t * 0.8);
+  if (musicPanel.mesh.visible) { musicPanel.refresh(now); closeBtn.refresh(now); }
+  glowU.uLevel.value += (musicLevel() - glowU.uLevel.value) * 0.15;
   tickAudio(t);
   renderer.render(scene, camera);
 });
@@ -688,4 +744,5 @@ addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; cam
 window.__beach = { camera, rig, scene, renderer, lieDown, standUp, snapTurn,
   look: (y, p = 0) => { yaw = y; pitch = p; },
   setPos: (x, y, z) => { rig.position.set(x, 0, z); rig.quaternion.identity(); camera.position.set(0, y, 0); },
+  toggleMenu, player, musicPanel,
   get lying() { return lying; } };
