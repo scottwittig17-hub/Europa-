@@ -6,7 +6,7 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MusicPlayer, createMusicPanel } from '../../core/music.js';   // b11: the submarine scene's music player + panel
 import { CanvasPanel, roundRect } from '../../core/panels.js';
 
-const BUILD = 'Beach b12';   // b10 walk limits + b11 radio music menu
+const BUILD = 'Beach b13';   // b10 walk limits + b11 radio music menu
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -471,6 +471,58 @@ const glowU = { uTime: U.uTime, uLevel: { value: 0 } };   // b11: uLevel = music
   const pm = new THREE.Mesh(pg, new THREE.MeshStandardMaterial({ color: new THREE.Color(0.62, 0.60, 0.56), roughness: 0.97, metalness: 0 }));
   const px = -0.35, pz = -2.28; pm.position.set(px, blanketY(px, pz) + 0.035, pz); pm.rotation.y = 0.04;
   pm.castShadow = true; pm.receiveShadow = true; scene.add(pm);
+}
+
+/* ---------------------------------------------------------- b13: Kai - still, soft lying silhouette beside the radio (+X half) */
+const kaiU = { uTime: U.uTime };
+{
+  const by = blanketY(1.0, -3.1);
+  // warm skin, matte; cheap fake subsurface = warm wrap at the terminator + soft red-orange rim (no extra passes)
+  const skin = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.78, 0.58, 0.47), roughness: 0.62, metalness: 0 });
+  skin.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `
+      { vec3 V = normalize(vViewPosition); float fr = pow(1.0 - clamp(dot(normal, V), 0.0, 1.0), 2.5);
+        float lum = dot(outgoingLight, vec3(0.3, 0.59, 0.11));
+        outgoingLight += vec3(0.55, 0.16, 0.08) * (0.35 * lum + 0.012) * (0.4 + fr);   // light bleeding through the skin
+        outgoingLight += vec3(0.30, 0.72, 0.78) * fr * 0.018; }                         // faint cool moon rim
+      #include <opaque_fragment>`);
+  };
+  const kai = new THREE.Group(); kai.name = 'kai';
+  const caps = (a, b, r, sx = 1, sy = 1) => {           // capsule from point a to b (blanket-local metres)
+    const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), L = A.distanceTo(B);
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.001, L), 8, 20), skin);
+    m.position.copy(A).add(B).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
+    m.scale.set(sx, 1, sy); m.castShadow = m.receiveShadow = true; kai.add(m); return m;
+  };
+  // lying on her left side, facing -X (toward the lie spot), head at the cliff end, knees drawn up a little
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.105, 32, 24), skin);
+  head.position.set(1.02, 0.115, -2.5); head.scale.set(0.88, 1.0, 1.12); head.castShadow = true; kai.add(head);
+  caps([1.03, 0.11, -2.6], [1.03, 0.115, -2.66], 0.055);                 // neck
+  caps([1.05, 0.15, -2.74], [1.08, 0.145, -3.2], 0.135, 0.62, 1.05);     // torso, one soft piece
+  caps([1.04, 0.205, -2.74], [1.07, 0.19, -2.86], 0.07);                 // upper shoulder softens the top line
+  caps([1.03, 0.19, -3.28], [0.82, 0.18, -3.52], 0.085);                 // upper thigh
+  caps([0.82, 0.18, -3.52], [0.97, 0.15, -3.86], 0.062);                 // upper shin
+  caps([1.06, 0.09, -3.3], [0.86, 0.085, -3.58], 0.08);                  // lower thigh (on the blanket)
+  caps([0.86, 0.08, -3.58], [1.02, 0.07, -3.92], 0.058);                 // lower shin
+  caps([0.98, 0.20, -2.78], [0.84, 0.13, -2.98], 0.05);                  // upper arm, resting forward
+  caps([0.84, 0.13, -2.98], [0.74, 0.07, -2.72], 0.04);                  // forearm toward the radio (rounded end, no hand)
+  kai.position.y = by + 0.012; scene.add(kai);
+  // halo: cool cyan pool under/around her (ice-vein family), slow pulse; warm edge on the side toward the radio
+  const hm = new THREE.ShaderMaterial({ uniforms: kaiU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv*2.0-1.0; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `uniform float uTime; varying vec2 vUv; void main(){
+      float r = length(vUv); float a = exp(-r*r*3.2) * smoothstep(1.0, 0.75, r);
+      float pulse = 0.82 + 0.18 * sin(uTime * 0.35);                  // ~18 s cycle, slower than the radio
+      vec3 cool = vec3(0.35, 0.85, 0.92);
+      float warmSide = smoothstep(0.1, -0.9, vUv.x) * smoothstep(-0.2, 0.9, vUv.y);   // -X side, head end (toward the radio)
+      vec3 c = mix(cool, vec3(1.0, 0.6, 0.3), warmSide * 0.55);
+      gl_FragColor = vec4(c * a * 0.11 * pulse, 1.0); }` });
+  const hx = 1.0, hz = -3.15, hg = new THREE.PlaneGeometry(1.1, 2.0, 16, 24); hg.rotateX(-Math.PI / 2);
+  const ha = hg.attributes.position;
+  for (let i = 0; i < ha.count; i++) { const x = ha.getX(i) + hx, z = ha.getZ(i) + hz; ha.setXYZ(i, x, blanketY(x, z) + 0.005, z); }
+  scene.add(new THREE.Mesh(hg, hm));
 }
 
 /* ---------------------------------------------------------- lie-down marker */
