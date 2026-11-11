@@ -6,7 +6,7 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MusicPlayer, createMusicPanel } from '../../core/music.js';   // b11: the submarine scene's music player + panel
 import { CanvasPanel, roundRect } from '../../core/panels.js';
 
-const BUILD = 'Build Nov 10 Beach b15 Kai movement (test)';
+const BUILD = 'Build Nov 11 Beach b16 custom music (test)';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -687,7 +687,7 @@ function tickAudio(t) {   // slow swells: each voice rises as the swash comes in
   if (now > audio.nextCall) { distantCall(); audio.nextCall = now + 25 + Math.random() * 35; }
 }
 
-/* ---------------------------------------------------------- b11: radio music menu (same player/panel as the submarine scene) */
+/* ---------------------------------------------------------- b11/b16: radio music menu (same player/panel + custom-track flow as the submarine scene) */
 const PLACEHOLDER_TRACKS = [
   { name: 'Under the Ice', url: '../assets/music/under-the-ice.mp3', placeholder: true },
   { name: 'Vent Pulse', url: '../assets/music/vent-pulse.mp3', placeholder: true },
@@ -702,12 +702,47 @@ const closeBtn = new CanvasPanel(0.05, 0.05, 1400, (ctx, p) => {
   p.regions.push({ id: 'close', x: 0, y: 0, w: W, h: W }); });
 closeBtn.mesh.position.set(0.31 - 0.012, 0.2 - 0.012, 0.004); musicPanel.mesh.add(closeBtn.mesh);
 closeBtn.onPress = () => toggleMenu(false);
-const fileIn = document.createElement('input'); fileIn.type = 'file'; fileIn.accept = 'audio/*'; fileIn.multiple = true; fileIn.style.display = 'none'; document.body.appendChild(fileIn);
-fileIn.addEventListener('change', () => { const f = [...fileIn.files]; if (f.length) player.addTracks(f.map(x => ({ name: x.name.replace(/\.[^.]+$/, ''), url: URL.createObjectURL(x) }))); fileIn.value = ''; });
-// '+ Add': a file picker can't open inside a Quest immersive session, so in VR it ends the session (like the sub scene); pick, then Enter VR again.
-musicPanel.setOnAdd(() => { if (renderer.xr.isPresenting) renderer.xr.getSession()?.end(); else fileIn.click(); });
+/* Music queue (same as the submarine, test #5): a multi-file pick becomes the queue; choosing again APPENDS
+   (placeholders are replaced by the first real pick). Lenient filter: some pickers (Quest/Android content URIs)
+   report an empty MIME type, so anything with an audio/video type, a known audio extension, or no type at all
+   is queued; files that turn out unplayable are skipped by the player. Tracks are blob URLs and do not persist
+   across reloads. */
+const fileInput = document.getElementById('musicInput'), trackList = document.getElementById('trackList');
+const queueNote = document.getElementById('queueNote'), musicBtn = document.getElementById('musicBtn');
+const AUDIO_EXT = /\.(mp3|m4a|m4b|aac|wav|wave|ogg|oga|opus|flac|webm|weba|mp4|aif|aiff|caf)$/i;
+function updateEntryTracks() {
+  trackList.innerHTML = '';
+  player.list.forEach((tr, i) => {
+    const li = document.createElement('li'); li.textContent = `${i + 1}. ${tr.name}`;
+    if (tr.placeholder) { const s = document.createElement('span'); s.className = 'tag'; s.textContent = 'placeholder'; li.append(s); }
+    trackList.append(li);
+  });
+}
+function addFiles(list) {
+  const files = [...list].filter((f) => f.type.startsWith('audio/') || f.type.startsWith('video/') || AUDIO_EXT.test(f.name) || !f.type);
+  if (!files.length) { queueNote.textContent = 'No audio files in that selection.'; return 0; }
+  const n = player.addTracks(files.map((f) => ({ name: f.name.replace(/\.[^.]+$/, ''), url: URL.createObjectURL(f) })));
+  queueNote.textContent = `Queued ${files.length} file${files.length > 1 ? 's' : ''} · ${n} track${n > 1 ? 's' : ''} in the queue. Choosing again adds more.`;
+  musicBtn.classList.remove('pulse'); console.info('[music] queued', files.length, 'files; queue length', n); updateEntryTracks(); return files.length;
+}
+fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+document.getElementById('usePlaceholders').addEventListener('click', () => {
+  player.setPlaylist(PLACEHOLDER_TRACKS); fileInput.value = '';
+  queueNote.textContent = 'Placeholder tracks queued.'; updateEntryTracks();
+});
+updateEntryTracks();
+/* '+ Add' on the in-VR music panel. A file picker must open from a user gesture and cannot show inside an
+   immersive session on Quest, so in VR it ends the session (music pauses), returns to this page with the
+   music button highlighted; pick files, then Enter VR again. On desktop the press arrives inside the
+   pointer event, so the picker opens directly. */
+let pendingAdd = false, resumeAfterAdd = false;
+musicPanel.setOnAdd(() => {
+  if (renderer.xr.isPresenting) { pendingAdd = true; resumeAfterAdd = player.playing; player.pause(); renderer.xr.getSession()?.end(); }
+  else fileInput.click();
+});
 let analyser = null, levelBuf = null;
 player.onChange(() => {                       // route the music through the scene's AudioContext once, for the glow level
+  updateEntryTracks();
   if (!player.playing || analyser) return; startAudio(); const ctx = audio.ctx;
   const src = ctx.createMediaElementSource(player.audio); analyser = ctx.createAnalyser(); analyser.fftSize = 256; levelBuf = new Uint8Array(analyser.fftSize);
   src.connect(analyser); analyser.connect(ctx.destination);
@@ -850,8 +885,17 @@ function pollPads() {
   g.font = '24px system-ui, sans-serif'; g.fillStyle = 'rgba(160,210,215,0.6)'; g.textAlign = 'center'; g.fillText(`Black Sand Beach · ${BUILD}`, 512, 40);
   const lab = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.04), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false, toneMapped: false }));
   lab.position.set(0, -0.42, -0.9); lab.rotation.x = -0.4; lab.renderOrder = 999; lab.visible = false; camera.add(lab);
-  renderer.xr.addEventListener('sessionstart', () => { lab.visible = true; startAudio(); document.getElementById('overlay').classList.add('hidden'); });
-  renderer.xr.addEventListener('sessionend', () => { lab.visible = false; standUp(); document.getElementById('overlay').classList.remove('hidden'); });
+  renderer.xr.addEventListener('sessionstart', () => {
+    lab.visible = true; startAudio(); document.getElementById('overlay').classList.add('hidden');
+    if (resumeAfterAdd) { resumeAfterAdd = false; player.play(); }
+  });
+  renderer.xr.addEventListener('sessionend', () => {
+    lab.visible = false; standUp(); document.getElementById('overlay').classList.remove('hidden');
+    if (pendingAdd) {
+      pendingAdd = false; musicBtn.classList.add('pulse');
+      queueNote.textContent = 'Choose more music to add to the queue, then Enter VR again.';
+    }
+  });
 }
 
 /* ---------------------------------------------------------- overlay / VR button */
@@ -892,5 +936,5 @@ addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; cam
 window.__beach = { camera, rig, scene, renderer, lieDown, standUp, snapTurn,
   look: (y, p = 0) => { yaw = y; pitch = p; },
   setPos: (x, y, z) => { rig.position.set(x, 0, z); rig.quaternion.identity(); camera.position.set(0, y, 0); },
-  toggleMenu, player, musicPanel,
-  get lying() { return lying; } };
+  toggleMenu, player, musicPanel, addFiles,
+  get lying() { return lying; }, get pendingAdd() { return pendingAdd; } };
