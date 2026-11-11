@@ -6,7 +6,7 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MusicPlayer, createMusicPanel } from '../../core/music.js';   // b11: the submarine scene's music player + panel
 import { CanvasPanel, roundRect } from '../../core/panels.js';
 
-const BUILD = 'Beach b14';   // b10 walk limits + b11 radio music menu
+const BUILD = 'Build Nov 10 Beach b15 Kai movement (test)';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -473,8 +473,28 @@ const glowU = { uTime: U.uTime, uLevel: { value: 0 } };   // b11: uLevel = music
   pm.castShadow = true; pm.receiveShadow = true; scene.add(pm);
 }
 
-/* ---------------------------------------------------------- b13: Kai - still, soft lying silhouette beside the radio (+X half) */
+/* ---------------------------------------------------------- b13: Kai - soft lying silhouette beside the radio (+X half); b15 adds breath, hair drift, head ease */
 const kaiU = { uTime: U.uTime };
+let kaiHead, kaiYaw = 0, kaiPitch = 0;
+const _kaiPivot = new THREE.Vector3();
+function tickKai(dt, camPos) {
+  if (!kaiHead) return;
+  kaiHead.getWorldPosition(_kaiPivot);
+  const dx = camPos.x - _kaiPivot.x, dy = camPos.y - _kaiPivot.y, dz = camPos.z - _kaiPivot.z;
+  const horiz = Math.hypot(dx, dz);
+  const yawRaw = Math.atan2(-dz, -dx);                 // 0 = rest, facing -X (toward the lie spot)
+  const pitchRaw = Math.atan2(dy, Math.max(0.05, horiz));
+  const inRange = horiz > 0.25 && Math.abs(yawRaw) <= deg(75);
+  // Glance, don't stare the full angle; close-range pitch is eased so the neck/hair seam stays covered.
+  const t = Math.min(1, Math.max(0, (horiz - 0.4) / 1.0));
+  const close = t * t * (3 - 2 * t);
+  const yawT = inRange ? 0.62 * THREE.MathUtils.clamp(yawRaw, -deg(75), deg(75)) : 0;
+  const pitchT = inRange ? 0.55 * close * THREE.MathUtils.clamp(pitchRaw, -deg(8), deg(8)) : 0;
+  const k = 1 - Math.exp(-dt / 1.25);                  // ~1.25 s ease, no snap
+  kaiYaw += (yawT - kaiYaw) * k;
+  kaiPitch += (pitchT - kaiPitch) * k;
+  kaiHead.rotation.set(0, kaiYaw, -kaiPitch);
+}
 {
   const by = blanketY(1.0, -3.1);
   // warm skin, matte; cheap fake subsurface = warm wrap at the terminator + soft red-orange rim (no extra passes)
@@ -499,34 +519,55 @@ const kaiU = { uTime: U.uTime };
   const dress = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.72, 0.44, 0.46), roughness: 0.94, metalness: 0, emissive: new THREE.Color(0.025, 0.010, 0.012) });
   const hair = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.12, 0.048, 0.025), roughness: 0.82, metalness: 0 });
   // Fine low-contrast strand shading, not a smooth sculpted slab; no extra light or pass.
+  // b15: tip-weighted breeze sway (phase varies along the lock); scalp aSway is 0 so it stays still.
   hair.onBeforeCompile = sh => {
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vHair;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvHair = position;');
+    sh.uniforms.uTime = U.uTime;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
+      varying vec3 vHair; attribute float aSway; uniform float uTime;`).replace('#include <begin_vertex>', `#include <begin_vertex>
+      vHair = position;
+      { float w = aSway; float phase = position.x * 9.0 + position.z * 5.5 + position.y * 7.0;
+        float breeze = sin(uTime * 0.62 + phase) * 0.70 + sin(uTime * 1.03 + phase * 1.6 + 1.3) * 0.30;
+        float lift = sin(uTime * 0.81 + phase * 1.2 + 0.6);
+        transformed += vec3(breeze * 0.016, lift * 0.008, breeze * 0.006) * w; }`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vHair;').replace('#include <color_fragment>', `#include <color_fragment>
       float strand = sin(vHair.x * 440.0 + sin(vHair.z * 21.0) * 1.6);
       float fade = 1.0 - smoothstep(0.6, 2.2, fwidth(vHair.x * 440.0));
       diffuseColor.rgb *= 0.92 + 0.08 * strand * fade;`);
   };
+  // b15: gentle chest rise and fall, ~13.5 breaths/min, faded out toward shoulder, waist, and the blanket side.
+  dress.onBeforeCompile = sh => {
+    sh.uniforms.uTime = U.uTime;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;').replace('#include <begin_vertex>', `#include <begin_vertex>
+      { float env = smoothstep(-2.66, -2.82, position.z) * smoothstep(-3.10, -2.92, position.z);
+        env *= smoothstep(0.08, 0.15, position.y);
+        float breath = sin(uTime * 1.414);
+        transformed += vec3(-0.003, 0.010, 0.0) * breath * env; }`);
+  };
   // Smooth loft: profile rows [z, x, y, x radius, y radius]. Shared rings avoid separate capsule joints.
-  const loft = (rows, material, rings = 64, sides = 32) => {
+  const loft = (rows, material, rings = 64, sides = 32, sway = false) => {
     const path = new THREE.CatmullRomCurve3(rows.map(r => new THREE.Vector3(r[1], r[2], r[0])), false, 'catmullrom', 0.35);
     const radii = new THREE.CatmullRomCurve3(rows.map(r => new THREE.Vector3(r[3], r[4], 0)), false, 'catmullrom', 0.25);
-    const pos = [], idx = [];
+    const pos = [], idx = [], sw = [];
     for (let j = 0; j <= rings; j++) {
-      const t = j / rings, c = path.getPoint(t), r = radii.getPoint(t);
+      const t = j / rings, c = path.getPoint(t), r = radii.getPoint(t), w = sway ? t * t : 0;
       for (let i = 0; i <= sides; i++) { const a = i / sides * Math.PI * 2;
-        pos.push(c.x + Math.max(0.001, r.x) * Math.cos(a), c.y + Math.max(0.001, r.y) * Math.sin(a), c.z); }
+        pos.push(c.x + Math.max(0.001, r.x) * Math.cos(a), c.y + Math.max(0.001, r.y) * Math.sin(a), c.z); sw.push(w); }
     }
     for (let j = 0; j < rings; j++) for (let i = 0; i < sides; i++) {
       const a = j * (sides + 1) + i, b = a + sides + 1; idx.push(a, b, a+1, b, b+1, a+1);
     }
     let g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+    g.setAttribute('aSway', new THREE.Float32BufferAttribute(sw, 1));
     g = mergeVertices(g); g.computeVertexNormals();
     const m = new THREE.Mesh(g, material); m.castShadow = m.receiveShadow = true; kai.add(m); return m;
   };
   // Neck and soft featureless face, turned toward Scott's lie spot (-X).
   caps([1.01, 0.12, -2.57], [1.02, 0.13, -2.72], 0.047);
+  // b15: head+scalp turn as a group around the top of the neck; rest pose is unchanged.
+  kaiHead = new THREE.Group(); kaiHead.name = 'kaiHead'; kaiHead.rotation.order = 'YXZ';
+  kaiHead.position.set(1.01, 0.122, -2.57); kai.add(kaiHead);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.106, 32, 24), skin);
-  head.position.set(1.0, 0.125, -2.5); head.scale.set(0.86, 1.02, 1.14); head.rotation.z = 0.12; head.castShadow = true; kai.add(head);
+  head.position.set(1.0 - 1.01, 0.125 - 0.122, -2.5 - (-2.57)); head.scale.set(0.86, 1.02, 1.14); head.rotation.z = 0.12; head.castShadow = true; kaiHead.add(head);
   // A single flowing drape: narrow shoulder, gently defined waist, wider softly rounded hip, loose hem.
   loft([
     [-2.64,1.025,0.125,0.002,0.003], [-2.72,1.04,0.145,0.086,0.12],
@@ -544,7 +585,8 @@ const kaiU = { uTime: U.uTime };
   const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.046, 20, 16), skin); elbow.position.set(0.83,0.12,-2.99); kai.add(elbow);
   // Chestnut scalp over the back of the head; no facial features. Long hair pools on the blanket behind the shoulder.
   const scalp = new THREE.Mesh(new THREE.SphereGeometry(0.108, 32, 24), hair);
-  scalp.position.set(1.045, 0.134, -2.505); scalp.scale.set(0.83,1.03,1.15); scalp.castShadow = true; kai.add(scalp);
+  scalp.position.set(1.045 - 1.01, 0.134 - 0.122, -2.505 - (-2.57)); scalp.scale.set(0.83,1.03,1.15); scalp.castShadow = true; kaiHead.add(scalp);
+  scalp.geometry.setAttribute('aSway', new THREE.Float32BufferAttribute(new Float32Array(scalp.geometry.attributes.position.count), 1));
   // Several narrow, flattening locks settle separately on the blanket; uneven soft tips replace the rigid two-lobed hair slab.
   for (let k = 0; k < 8; k++) {
     const offset = (k - 3.5) * 0.018, wave = Math.sin(k * 1.9), len = 0.47 + 0.10 * Math.sin(k * 1.3 + 0.5);
@@ -557,7 +599,7 @@ const kaiU = { uTime: U.uTime };
       [start - 0.27,side + 0.056 + 0.016 * wave,0.031,0.027,0.012],
       [end + 0.065,tip + 0.04,0.022,0.018,0.007],
       [end,tip + 0.024,0.02,0.001,0.001]
-    ], hair, 40, 12);
+    ], hair, 40, 12, true);
   }
   kai.position.y = by + 0.012; scene.add(kai);
   // halo: cool cyan pool under/around her (ice-vein family), slow pulse; warm edge on the side toward the radio
@@ -804,9 +846,9 @@ function pollPads() {
 
 /* ---------------------------------------------------------- in-headset build label */
 {
-  const c = document.createElement('canvas'); c.width = 512; c.height = 64; const g = c.getContext('2d');
-  g.font = '28px system-ui, sans-serif'; g.fillStyle = 'rgba(160,210,215,0.6)'; g.textAlign = 'center'; g.fillText(`Black Sand Beach · ${BUILD}`, 256, 40);
-  const lab = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.04), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false, toneMapped: false }));
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 64; const g = c.getContext('2d');
+  g.font = '24px system-ui, sans-serif'; g.fillStyle = 'rgba(160,210,215,0.6)'; g.textAlign = 'center'; g.fillText(`Black Sand Beach · ${BUILD}`, 512, 40);
+  const lab = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.04), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false, toneMapped: false }));
   lab.position.set(0, -0.42, -0.9); lab.rotation.x = -0.4; lab.renderOrder = 999; lab.visible = false; camera.add(lab);
   renderer.xr.addEventListener('sessionstart', () => { lab.visible = true; startAudio(); document.getElementById('overlay').classList.add('hidden'); });
   renderer.xr.addEventListener('sessionend', () => { lab.visible = false; standUp(); document.getElementById('overlay').classList.remove('hidden'); });
@@ -833,10 +875,12 @@ renderer.setAnimationLoop(() => {
   const now = performance.now(); frames++;
   if (now - lastT > 500) { ema = ema * 0.6 + frames * 1000 / (now - lastT) * 0.4; fpsEl.textContent = `${ema.toFixed(0)} fps`; frames = 0; lastT = now; }
   const t = window.__beachTime ?? now * 0.001; U.uTime.value = t;
-  softBounds(Math.min(0.1, (now - (window.__lastFrame ?? now)) / 1000)); window.__lastFrame = now;
+  const dt = Math.min(0.1, (now - (window.__lastFrame ?? now)) / 1000);
+  softBounds(dt); window.__lastFrame = now;
   if (!renderer.xr.isPresenting) { camera.rotation.set(0, 0, 0); camera.rotateY(yaw); camera.rotateX(pitch); }
   else pollPads();
   camera.getWorldPosition(_p); skyRig.position.copy(_p);
+  tickKai(dt, _p);
   ledMat.opacity = 0.55 + 0.35 * Math.sin(t * 0.8);
   if (musicPanel.mesh.visible) { musicPanel.refresh(now); closeBtn.refresh(now); }
   glowU.uLevel.value += (musicLevel() - glowU.uLevel.value) * 0.15;
