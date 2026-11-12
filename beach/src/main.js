@@ -6,7 +6,7 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MusicPlayer, createMusicPanel } from '../../core/music.js';   // b11: the submarine scene's music player + panel
 import { CanvasPanel, roundRect } from '../../core/panels.js';
 
-const BUILD = 'Build Nov 11 Beach b16 custom music (test)';
+const BUILD = 'Build Nov 11 Beach b17 distant galaxies (test)';
 { const b = document.querySelector('#hud .build'); if (b) b.textContent = BUILD; }
 
 const PLAYER_HEIGHT = 1.7, LIE_EYE = 0.25, LIE_PITCH = THREE.MathUtils.degToRad(50);
@@ -263,7 +263,7 @@ water.position.set(0, -0.06, SHORE_Z - 750 + 3); scene.add(water);
 /* ---------------------------------------------------------- sky: stars + two moons (glued to the head) */
 const skyRig = new THREE.Group(); scene.add(skyRig);
 // b8: galaxy frame shared by the star mask and the galaxy quad (quad local axes in skyRig space)
-const GAL_DIR = dirFrom(42, 39), GAL_ROT = deg(-18), GAL_W = 16, GAL_ASPECT = 783 / 1400;
+const GAL_DIR = dirFrom(42, 39), GAL_ROT = deg(-18), GAL_W = 3, GAL_ASPECT = 783 / 1400;  // b17: 16° → 3°, so the pair reads as a distant faint object
 const galFrame = new THREE.Object3D(); galFrame.position.copy(GAL_DIR); galFrame.lookAt(0, 0, 0); galFrame.rotateZ(GAL_ROT); galFrame.updateMatrix();
 const galX = new THREE.Vector3(), galY = new THREE.Vector3(), galZ = new THREE.Vector3(); galFrame.matrix.extractBasis(galX, galY, galZ);
 {
@@ -337,7 +337,7 @@ makeMoon(MOON_B, 7.9, new THREE.Vector2(-0.55, 0.2));
 /* ---------------------------------------------------------- merging galaxies (sky-fixed, additive, no parallax) */
 {
   const gTex = new THREE.TextureLoader().load('./assets/galaxies.jpg'); gTex.colorSpace = THREE.SRGBColorSpace;
-  const D = 1650, w = 2 * D * Math.tan(deg(GAL_W) / 2), h = w * GAL_ASPECT;   // b8: beyond the 1500 m star sphere, same angular size
+  const D = 2800, w = 2 * D * Math.tan(deg(GAL_W) / 2), h = w * GAL_ASPECT;   // b17: farther than the 1500 m star sphere, still inside the 3000 m far plane
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: gTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, color: new THREE.Color(0.55, 0.55, 0.55) }));
   m.position.copy(GAL_DIR).multiplyScalar(D); m.lookAt(0, 0, 0); m.rotateZ(GAL_ROT);
   m.renderOrder = -12; m.frustumCulled = false; skyRig.add(m);   // b8: drawn before (behind) the stars
