@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Europa — a world beneath the ice</title>
+<meta name="description" content="A WebXR experience of Jupiter’s icy moon for Meta Quest. Ride the Hidden Ocean, walk Black Sand Beach, and stand on the Frozen Surface — in the browser, no install.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="stars"></canvas>
+<div class="glow"></div>
+<div class="jupiter"></div>
+<main>
+  <header>
+    <p class="wordmark">EUROPA</p>
+    <h1>Europa — a world beneath the ice</h1>
+    <p class="subline">Ride a submarine through glowing caverns, sit on a night beach under two moons, and walk the frozen surface of Jupiter’s moon.</p>
+    <p class="meta">A <strong>WebXR</strong> experience for <strong>Meta Quest</strong>, in the browser — no install.</p>
+  </header>
+
+  <section class="offer" aria-label="Price and access">
+    <div class="offer-copy">
+      <span class="tag">Early access</span>
+      <!-- EDIT PRICE HERE -->
+      <span id="price" class="price">$5</span>
+    </div>
+    <!--
+      Checkout: this button currently opens the Europa hub (no payment is processed).
+      When a checkout is set up, replace the href below with the payment or store link.
+    -->
+    <a class="buy" href="../hub/">Buy / Enter Europa</a>
+  </section>
+  <p class="fine">No payment is taken on this page. The button opens the Europa hub, where you choose a place to go.</p>
+
+  <h2>The world</h2>
+  <div class="grid">
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/ocean.jpg)"></div>
+      <div class="body">
+        <h3>Hidden Ocean</h3>
+        <p>A slow submarine ride through glowing caverns beneath the ice, with your own music.</p>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/beach.jpg)"></div>
+      <div class="body">
+        <h3>Black Sand Beach</h3>
+        <p>A night beach under two moons, with a blanket and radio by the water.</p>
+      </div>
+    </article>
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/surface.jpg)"></div>
+      <div class="body">
+        <h3>Frozen Surface</h3>
+        <p>Walk the ice under Jupiter. Six viewpoints to teleport between.</p>
+      </div>
+    </article>
+  </div>
+
+  <h2 class="sub">Surface viewpoints</h2>
+  <p class="note">The Frozen Surface starts at the Canyon. From there you can teleport to each of these places.</p>
+  <div class="grid small">
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/canyon.jpg)"></div>
+      <div class="body"><h3>Canyon</h3><p>The starting point on the ice.</p></div>
+    </article>
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/crevasse.jpg)"></div>
+      <div class="body"><h3>Crevasse Rim</h3><p>Open lineae at the edge of a deep cut.</p></div>
+    </article>
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/fissure.jpg)"></div>
+      <div class="body"><h3>Fissure Vantage</h3><p>A view across the fissure field.</p></div>
+    </article>
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/chaos.jpg)"></div>
+      <div class="body"><h3>Chaos Terrain</h3><p>Broken ice in jumbled blocks.</p></div>
+    </article>
+    <article class="card">
+      <div class="thumb" style="background-image:url(../hub/img/ridge.jpg)"></div>
+      <div class="body"><h3>Ridge Overlook</h3><p>A high look over the ridges.</p></div>
+    </article>
+    <article class="card">
+      <div class="thumb cavern"></div>
+      <div class="body"><h3>Ice Cavern</h3><p>A shelter of ice below the surface.</p></div>
+    </article>
+  </div>
+
+  <footer>Europa · Early access · WebXR for Meta Quest</footer>
+</main>
+<script>
+(() => {
+  const c = document.getElementById('stars'), x = c.getContext('2d');
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  function draw() {
+    const d = Math.min(window.devicePixelRatio || 1, 2), w = innerWidth, h = innerHeight;
+    c.width = w * d; c.height = h * d; x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, w, h);
+    seed = 7; const n = Math.round(w * h / 2600);
+    for (let i = 0; i < n; i++) {
+      const r = rnd() < 0.94 ? 0.5 + rnd() * 0.5 : 1 + rnd() * 0.6, a = 0.25 + rnd() * 0.7, t = rnd();
+      x.fillStyle = t < 0.15 ? `rgba(255,226,196,${a})` : t < 0.35 ? `rgba(196,228,255,${a})` : `rgba(255,255,255,${a})`;
+      x.beginPath(); x.arc(rnd() * w, rnd() * h, r, 0, 6.2832); x.fill();
+    }
+  }
+  draw(); addEventListener('resize', draw);
+})();
+</script>
+</body>
+</html>
