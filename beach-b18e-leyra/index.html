@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Black Sand Beach — Night</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color: #cfe3f5; }
+  #app { position: fixed; inset: 0; } canvas { display: block; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; background: radial-gradient(ellipse at center, #071417 0%, #000 75%);
+    z-index: 10; text-align: center; padding: 24px; transition: opacity .6s; overflow-y: auto; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h1 { font-size: 26px; letter-spacing: 6px; margin: 0; color: #a9e4e6; font-weight: 300; }
+  #overlay p { max-width: 520px; line-height: 1.6; color: #8fa8b0; font-size: 15px; margin: 0; }
+  #overlay button { font-size: 17px; padding: 14px 42px; border-radius: 999px; cursor: pointer;
+    background: #0e2a30; color: #cfeff0; border: 1px solid #2f7580; letter-spacing: 1px; }
+  #overlay button:disabled { opacity: .45; cursor: default; }
+  #music-block { width: min(520px, 100%); }
+  #music-block h2 { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: #8fa8b0;
+    margin: 4px 0 8px; font-weight: 600; }
+  #music-block .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  #overlay #music-block button, #overlay .filebtn { font-size: 15px; padding: 10px 20px; border-radius: 999px;
+    cursor: pointer; background: #0e2a30; color: #cfeff0; border: 1px solid #2f7580; letter-spacing: 1px;
+    display: inline-block; }
+  #overlay input[type=file] { display: none; }
+  #overlay .filebtn.pulse { box-shadow: 0 0 0 3px rgba(240,184,120,.8); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(240,184,120,.25); } }
+  #overlay .note { max-width: 520px; line-height: 1.5; color: #8fa8b0; font-size: 13px; margin: 8px 0 0; min-height: 1em; }
+  #trackList { list-style: none; padding: 0; margin: 8px 0 0; max-height: 130px; overflow: auto;
+    color: #cfe3f5; width: 100%; text-align: left; }
+  #trackList li { padding: 3px 0; border-bottom: 1px solid rgba(143,168,176,.18); font-size: 14px; }
+  #trackList .tag { margin-left: 8px; font-size: 11px; color: #f0b878; letter-spacing: .08em; text-transform: uppercase; }
+  #hud { position: fixed; top: 12px; left: 12px; z-index: 5; font-size: 12px; color: #9fd0d0;
+    background: rgba(4, 12, 14, .45); border: 1px solid rgba(80, 150, 160, .3);
+    border-radius: 8px; padding: 6px 10px; line-height: 1.6; pointer-events: none; }
+  #ui { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; gap: 10px; }
+  #ui button { font-size: 14px; padding: 9px 18px; border-radius: 999px; cursor: pointer;
+    background: rgba(10, 26, 30, .75); color: #cfeff0; border: 1px solid #2f7580; }
+  #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 8; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">BLACK SAND BEACH · <span class="build">build</span><br><span class="fps">-- fps</span></div>
+<div id="ui"><button id="lie">Lie down</button><button id="stand">Stand up</button></div>
+<div id="fade"></div>
+<div id="overlay">
+  <h1>BLACK SAND BEACH</h1>
+  <p>Night. Two moons over the water.<br>Desktop: drag to look, click the soft glow on the blanket to lie down
+     (click again, the Stand up button, or Esc to get up).<br>VR: point at the glow and pull the trigger; trigger again or B/Y to stand. Stick left/right snap-turns 30°.</p>
+  <div id="music-block">
+    <h2>Music</h2>
+    <div class="row">
+      <label class="filebtn" id="musicBtn" for="musicInput">Choose music files…</label>
+      <input id="musicInput" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.opus,.flac,.webm,.weba" multiple>
+      <button id="usePlaceholders" type="button">Use placeholder tracks</button>
+    </div>
+    <p class="note" id="queueNote">Select several files at once to make a queue; choosing again adds to it.</p>
+    <ol id="trackList"></ol>
+    <p class="note">Your files stay on this device; nothing is uploaded. In VR, click the player on the blanket, then + Add — the headset returns here so you can pick files, then Enter VR again.</p>
+  </div>
+  <button id="enter-vr" disabled>checking VR…</button>
+  <button id="enter-desk">Enter (desktop)</button>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
