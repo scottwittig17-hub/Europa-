@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Europa surface picture chooser</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #0a0c10; color: #e8eef6; }
+    body {
+      font: 22px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    header {
+      padding: 28px 24px 20px;
+      background: #0a0c10;
+      border-bottom: 1px solid #2a3340;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 34px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .note {
+      margin: 0 0 12px;
+      font-size: 22px;
+      color: #f0d9a0;
+      max-width: 52rem;
+    }
+    .sub {
+      margin: 0 0 12px;
+      font-size: 18px;
+      color: #9aa6b4;
+      max-width: 52rem;
+    }
+    nav { font-size: 22px; }
+    nav a { color: #8ec8ff; text-decoration: none; margin-right: 0; }
+    nav a:hover { text-decoration: underline; }
+    #picks {
+      margin: 14px 0 0;
+      padding: 12px 14px;
+      background: #141a22;
+      border: 1px solid #2a3340;
+      border-radius: 10px;
+      font-size: 20px;
+    }
+    #picks strong { color: #f0d9a0; }
+    main { padding: 12px 20px 80px; }
+    h2 {
+      margin: 36px 0 8px;
+      font-size: 32px;
+      font-weight: 700;
+      color: #fff;
+      border-top: 1px solid #2a3340;
+      padding-top: 28px;
+    }
+    h2 .tag {
+      display: inline-block;
+      margin-left: 10px;
+      font-size: 18px;
+      font-weight: 500;
+      color: #9aa6b4;
+    }
+    h3 {
+      margin: 22px 0 10px;
+      font-size: 26px;
+      font-weight: 650;
+      color: #c5d4e4;
+    }
+    .onlyone {
+      font-size: 18px;
+      color: #9aa6b4;
+      font-weight: 500;
+      margin-left: 8px;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      align-items: stretch;
+    }
+    .card {
+      flex: 1 1 420px;
+      max-width: 640px;
+      background: #12171e;
+      border: 3px solid #2a3340;
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .card.selected {
+      border-color: #f0d9a0;
+      box-shadow: 0 0 0 2px #f0d9a0;
+    }
+    .card a.preview {
+      display: block;
+      background: #000;
+      line-height: 0;
+    }
+    .card img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .meta {
+      padding: 14px 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .code {
+      font-size: 28px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: 0.01em;
+    }
+    .used, .file, .blurb {
+      font-size: 18px;
+      color: #c5d4e4;
+    }
+    .used { color: #f0d9a0; }
+    .blurb { color: #b7c3d0; }
+    .file { color: #8b97a6; font-size: 16px; }
+    button.select {
+      margin-top: 8px;
+      appearance: none;
+      border: 2px solid #f0d9a0;
+      background: transparent;
+      color: #f0d9a0;
+      font: inherit;
+      font-size: 20px;
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      min-height: 48px;
+    }
+    .card.selected button.select {
+      background: #f0d9a0;
+      color: #1a1408;
+    }
+    #lb {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.92);
+      z-index: 20;
+      overflow: auto;
+      padding: 16px;
+    }
+    #lb.open { display: block; }
+    #lb img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 0 auto;
+    }
+    #lb .closehint {
+      text-align: center;
+      color: #c5d4e4;
+      font-size: 22px;
+      padding: 12px 8px 18px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Europa surface picture chooser</h1>
+    <p class="note">Pick one option code per direction; nothing changes until Scott says go.</p>
+    <p class="sub">Tap a picture to open a larger preview. Use Select if you want to mark a favourite — that stays on this page only. r10c is the live /surface/ folder. Canyon is in a last section because it is already being handled in r12m.</p>
+    <nav><a href="#id_fissure">Fissure Vantage</a> · <a href="#id_ridge">Ridge Overlook</a> · <a href="#id_crevasse">Crevasse Rim</a> · <a href="#id_canyon">Canyon</a></nav>
+    <div id="picks"><strong>Your picks:</strong> <span id="picklist">none yet</span></div>
+  </header>
+  <main>
+<h2 id="id_fissure">Fissure Vantage</h2>
+<h3 id="fissure-front">Front <span class="onlyone">6 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="fissure-front" data-code="Fissure Front A">
+  <a class="preview" href="img/fissure-front-a.jpg" data-full="img/fissure-front-a.jpg"><img src="img/fissure-front-a.jpg" alt="Fissure Front A" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Front A</div>
+    <div class="used">Used in: Oct 26–r7</div>
+    <div class="file">fissure-vantage-vista.jpg · original 4096×2304</div>
+    <div class="blurb">First Fissure Vantage picture (Oct 26).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-front" data-code="Fissure Front B">
+  <a class="preview" href="img/fissure-front-b.jpg" data-full="img/fissure-front-b.jpg"><img src="img/fissure-front-b.jpg" alt="Fissure Front B" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Front B</div>
+    <div class="used">Used in: r8f–r9, r12l, r12m</div>
+    <div class="file">fissure-vantage-vista-r12l-r9.jpg · original 4096×2304</div>
+    <div class="blurb">r9 picture (also r8f): rust veining muted.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-front" data-code="Fissure Front C">
+  <a class="preview" href="img/fissure-front-c.jpg" data-full="img/fissure-front-c.jpg"><img src="img/fissure-front-c.jpg" alt="Fissure Front C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Front C</div>
+    <div class="used">Used in: r10, r10b</div>
+    <div class="file">fissure-vantage-vista.jpg · original 4096×2304</div>
+    <div class="blurb">r10: cracks muted and corners softened.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-front" data-code="Fissure Front D">
+  <a class="preview" href="img/fissure-front-d.jpg" data-full="img/fissure-front-d.jpg"><img src="img/fissure-front-d.jpg" alt="Fissure Front D" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Front D</div>
+    <div class="used">Used in: r10c–r12</div>
+    <div class="file">fissure-vantage-vista.jpg · original 4096×2304</div>
+    <div class="blurb">r10c and r12: brown streaks and the far-plain crevice line softened (v6).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-front" data-code="Fissure Front E">
+  <a class="preview" href="img/fissure-front-e.jpg" data-full="img/fissure-front-e.jpg"><img src="img/fissure-front-e.jpg" alt="Fissure Front E" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Front E</div>
+    <div class="used">Used in: r12b–r12k</div>
+    <div class="file">fissure-vantage-vista.jpg · original 4096×2304</div>
+    <div class="blurb">Used in r12b–r12k; same 4096 framing as the r10c/r12 front, later copy.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-front" data-code="Fissure Front Source">
+  <a class="preview" href="img/fissure-front-source.jpg" data-full="img/fissure-front-source.jpg"><img src="img/fissure-front-source.jpg" alt="Fissure Front Source" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Front Source</div>
+    <div class="used">Used in: source original, not used as-is in a build</div>
+    <div class="file">fissure-vantage.png · original 5376×3024</div>
+    <div class="blurb">Mars's 5376×3024 Fissure Vantage original. Not used as-is in a build.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="fissure-left">Left <span class="onlyone">5 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="fissure-left" data-code="Fissure Left A">
+  <a class="preview" href="img/fissure-left-a.jpg" data-full="img/fissure-left-a.jpg"><img src="img/fissure-left-a.jpg" alt="Fissure Left A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Left A</div>
+    <div class="used">Used in: Oct 31 early–r7</div>
+    <div class="file">fissure-left.jpg · original 1280×720</div>
+    <div class="blurb">First painted left panel (Oct 31).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-left" data-code="Fissure Left B">
+  <a class="preview" href="img/fissure-left-b.jpg" data-full="img/fissure-left-b.jpg"><img src="img/fissure-left-b.jpg" alt="Fissure Left B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Left B</div>
+    <div class="used">Used in: r8f–r9, r11f, r12, r12l, r12m</div>
+    <div class="file">fissure-left.jpg · original 1280×720</div>
+    <div class="blurb">r9 left (also r8f); brought back in r11f, r12, r12l and r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-left" data-code="Fissure Left C">
+  <a class="preview" href="img/fissure-left-c.jpg" data-full="img/fissure-left-c.jpg"><img src="img/fissure-left-c.jpg" alt="Fissure Left C" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Left C</div>
+    <div class="used">Used in: r10–r10c, r11s, r11u, r12b, r12c</div>
+    <div class="file">fissure-left.jpg · original 1280×720</div>
+    <div class="blurb">r10 left (cracks muted); used in live /surface/, r11s, r11u, r12b and r12c.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-left" data-code="Fissure Left D">
+  <a class="preview" href="img/fissure-left-d.jpg" data-full="img/fissure-left-d.jpg"><img src="img/fissure-left-d.jpg" alt="Fissure Left D" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Left D</div>
+    <div class="used">Used in: r12d–r12j</div>
+    <div class="file">fissure-left.jpg · original 1280×720</div>
+    <div class="blurb">r12d repaint: the left crevasse under Jupiter was painted out.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-left" data-code="Fissure Left E">
+  <a class="preview" href="img/fissure-left-e.jpg" data-full="img/fissure-left-e.jpg"><img src="img/fissure-left-e.jpg" alt="Fissure Left E" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Left E</div>
+    <div class="used">Used in: r12k</div>
+    <div class="file">fissure-left-5120-r12k.jpg · original 5120×2880</div>
+    <div class="blurb">r12k: 5120 regeneration of the r12d left repaint.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="fissure-right">Right <span class="onlyone">4 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="fissure-right" data-code="Fissure Right A">
+  <a class="preview" href="img/fissure-right-a.jpg" data-full="img/fissure-right-a.jpg"><img src="img/fissure-right-a.jpg" alt="Fissure Right A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Right A</div>
+    <div class="used">Used in: Oct 31 early–r7</div>
+    <div class="file">fissure-right.jpg · original 1280×720</div>
+    <div class="blurb">First painted right panel (Oct 31).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-right" data-code="Fissure Right B">
+  <a class="preview" href="img/fissure-right-b.jpg" data-full="img/fissure-right-b.jpg"><img src="img/fissure-right-b.jpg" alt="Fissure Right B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Right B</div>
+    <div class="used">Used in: r8f–r9, r11f, r12, r12l, r12m</div>
+    <div class="file">fissure-right.jpg · original 1280×720</div>
+    <div class="blurb">r9 right (also r8f); brought back in r11f, r12, r12l and r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-right" data-code="Fissure Right C">
+  <a class="preview" href="img/fissure-right-c.jpg" data-full="img/fissure-right-c.jpg"><img src="img/fissure-right-c.jpg" alt="Fissure Right C" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Right C</div>
+    <div class="used">Used in: r10–r10c, r11s, r11u, r12b–r12j</div>
+    <div class="file">fissure-right.jpg · original 1280×720</div>
+    <div class="blurb">r10 right; used in most later builds until r12k.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-right" data-code="Fissure Right D">
+  <a class="preview" href="img/fissure-right-d.jpg" data-full="img/fissure-right-d.jpg"><img src="img/fissure-right-d.jpg" alt="Fissure Right D" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Right D</div>
+    <div class="used">Used in: r12k</div>
+    <div class="file">fissure-right-5120-r12k.jpg · original 5120×2880</div>
+    <div class="blurb">r12k: new 5120 right-hand layout (horizon 0.224).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="fissure-back">Back <span class="onlyone">3 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="fissure-back" data-code="Fissure Back A">
+  <a class="preview" href="img/fissure-back-a.jpg" data-full="img/fissure-back-a.jpg"><img src="img/fissure-back-a.jpg" alt="Fissure Back A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Back A</div>
+    <div class="used">Used in: Oct 31 early</div>
+    <div class="file">fissure-back.jpg · original 1280×720</div>
+    <div class="blurb">First painted back panel (Oct 31).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-back" data-code="Fissure Back B">
+  <a class="preview" href="img/fissure-back-b.jpg" data-full="img/fissure-back-b.jpg"><img src="img/fissure-back-b.jpg" alt="Fissure Back B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Fissure Back B</div>
+    <div class="used">Used in: Oct 31 back v2</div>
+    <div class="file">fissure-back.jpg · original 1280×720</div>
+    <div class="blurb">Oct 31 repaint with glow mid-frame.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="fissure-back" data-code="Fissure Back C">
+  <a class="preview" href="img/fissure-back-c.jpg" data-full="img/fissure-back-c.jpg"><img src="img/fissure-back-c.jpg" alt="Fissure Back C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Fissure Back C</div>
+    <div class="used">Used in: Oct 31 Imagine–r12m</div>
+    <div class="file">fissure-back.jpg · original 3072×1728</div>
+    <div class="blurb">Scott's Imagine render (3072 wide). Used from Oct 31 onward in every later build.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h2 id="id_ridge">Ridge Overlook</h2>
+<h3 id="ridge-front">Front <span class="onlyone">4 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="ridge-front" data-code="Ridge Front A">
+  <a class="preview" href="img/ridge-front-a.jpg" data-full="img/ridge-front-a.jpg"><img src="img/ridge-front-a.jpg" alt="Ridge Front A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Ridge Front A</div>
+    <div class="used">Used in: Oct 30–r3</div>
+    <div class="file">ridge-front.jpg · original 1280×720</div>
+    <div class="blurb">Oct 30 original front.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-front" data-code="Ridge Front B">
+  <a class="preview" href="img/ridge-front-b.jpg" data-full="img/ridge-front-b.jpg"><img src="img/ridge-front-b.jpg" alt="Ridge Front B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Ridge Front B</div>
+    <div class="used">Used in: r6–r12g, r12l, r12m</div>
+    <div class="file">ridge-front.jpg · original 1280×720</div>
+    <div class="blurb">r6 matched front. Used through r12g, and again in r12l/r12m (r9 ground).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-front" data-code="Ridge Front C">
+  <a class="preview" href="img/ridge-front-c.jpg" data-full="img/ridge-front-c.jpg"><img src="img/ridge-front-c.jpg" alt="Ridge Front C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Front C</div>
+    <div class="used">Used in: r12h–r12j</div>
+    <div class="file">ridge-front@4x.jpg · original 5120×2880</div>
+    <div class="blurb">r12h 5120 upscale (Real-ESRGAN x4) of the r6 1280 front.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-front" data-code="Ridge Front D">
+  <a class="preview" href="img/ridge-front-d.jpg" data-full="img/ridge-front-d.jpg"><img src="img/ridge-front-d.jpg" alt="Ridge Front D" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Front D</div>
+    <div class="used">Used in: r12k</div>
+    <div class="file">ridge-front-5120-r12k.jpg · original 5120×2880</div>
+    <div class="blurb">r12k: regenerated 5120 front, sky cut at the skyline.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="ridge-left">Left <span class="onlyone">4 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="ridge-left" data-code="Ridge Left A">
+  <a class="preview" href="img/ridge-left-a.jpg" data-full="img/ridge-left-a.jpg"><img src="img/ridge-left-a.jpg" alt="Ridge Left A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Ridge Left A</div>
+    <div class="used">Used in: Oct 30–r12g, r12l, r12m</div>
+    <div class="file">ridge-left.jpg · original 1280×720</div>
+    <div class="blurb">Oct 30 original left. Used through r12g, and again in r12l/r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-left" data-code="Ridge Left B">
+  <a class="preview" href="img/ridge-left-b.jpg" data-full="img/ridge-left-b.jpg"><img src="img/ridge-left-b.jpg" alt="Ridge Left B" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Left B</div>
+    <div class="used">Used in: r12h</div>
+    <div class="file">ridge-left@4x.jpg · original 5120×2880</div>
+    <div class="blurb">r12h 5120 upscale of the 1280 left.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-left" data-code="Ridge Left C">
+  <a class="preview" href="img/ridge-left-c.jpg" data-full="img/ridge-left-c.jpg"><img src="img/ridge-left-c.jpg" alt="Ridge Left C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Left C</div>
+    <div class="used">Used in: r12i</div>
+    <div class="file">ridge-left-5120-from5376.jpg · original 5120×2880</div>
+    <div class="blurb">r12i: rebuilt from the 5376 Fissure Vantage original.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-left" data-code="Ridge Left D">
+  <a class="preview" href="img/ridge-left-d.jpg" data-full="img/ridge-left-d.jpg"><img src="img/ridge-left-d.jpg" alt="Ridge Left D" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Left D</div>
+    <div class="used">Used in: r12j, r12k</div>
+    <div class="file">ridge-left-5120-r12j.jpg · original 5120×2880</div>
+    <div class="blurb">r12j: r12i left with the sky re-cut per column at the skyline (removes the floating slab).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="ridge-right">Right <span class="onlyone">3 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="ridge-right" data-code="Ridge Right A">
+  <a class="preview" href="img/ridge-right-a.jpg" data-full="img/ridge-right-a.jpg"><img src="img/ridge-right-a.jpg" alt="Ridge Right A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Ridge Right A</div>
+    <div class="used">Used in: Oct 30–r12g, r12l, r12m</div>
+    <div class="file">ridge-right.jpg · original 1280×720</div>
+    <div class="blurb">Oct 30 original right. Used through r12g, and again in r12l/r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-right" data-code="Ridge Right B">
+  <a class="preview" href="img/ridge-right-b.jpg" data-full="img/ridge-right-b.jpg"><img src="img/ridge-right-b.jpg" alt="Ridge Right B" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Right B</div>
+    <div class="used">Used in: r12h–r12j</div>
+    <div class="file">ridge-right@4x.jpg · original 5120×2880</div>
+    <div class="blurb">r12h 5120 upscale of the 1280 right; also used in r12i and r12j.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-right" data-code="Ridge Right C">
+  <a class="preview" href="img/ridge-right-c.jpg" data-full="img/ridge-right-c.jpg"><img src="img/ridge-right-c.jpg" alt="Ridge Right C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Right C</div>
+    <div class="used">Used in: r12k</div>
+    <div class="file">ridge-right-5120-r12k.jpg · original 5120×2880</div>
+    <div class="blurb">r12k: regenerated 5120 right, sky cut at the skyline.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="ridge-back">Back <span class="onlyone">3 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="ridge-back" data-code="Ridge Back A">
+  <a class="preview" href="img/ridge-back-a.jpg" data-full="img/ridge-back-a.jpg"><img src="img/ridge-back-a.jpg" alt="Ridge Back A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Ridge Back A</div>
+    <div class="used">Used in: Oct 30–r6</div>
+    <div class="file">ridge-back.jpg · original 1280×720</div>
+    <div class="blurb">Oct 30 original back.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-back" data-code="Ridge Back B">
+  <a class="preview" href="img/ridge-back-b.jpg" data-full="img/ridge-back-b.jpg"><img src="img/ridge-back-b.jpg" alt="Ridge Back B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Ridge Back B</div>
+    <div class="used">Used in: r7–r12g, r12l, r12m</div>
+    <div class="file">ridge-back.jpg · original 1280×720</div>
+    <div class="blurb">r7 new back picture. Used through r12g, and again in r12l/r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="ridge-back" data-code="Ridge Back C">
+  <a class="preview" href="img/ridge-back-c.jpg" data-full="img/ridge-back-c.jpg"><img src="img/ridge-back-c.jpg" alt="Ridge Back C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Ridge Back C</div>
+    <div class="used">Used in: r12h–r12k</div>
+    <div class="file">ridge-back@4x.jpg · original 5120×2880</div>
+    <div class="blurb">r12h 5120 upscale of the r7 1280 back; also used in r12i–r12k.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h2 id="id_crevasse">Crevasse Rim</h2>
+<h3 id="crevasse-front">Front <span class="onlyone">only one version</span></h3>
+<div class="row">
+<article class="card" data-dir="crevasse-front" data-code="Crevasse Front A">
+  <a class="preview" href="img/crevasse-front-a.jpg" data-full="img/crevasse-front-a.jpg"><img src="img/crevasse-front-a.jpg" alt="Crevasse Front A" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Front A</div>
+    <div class="used">Used in: Oct 25–r12m</div>
+    <div class="file">crevasse-front.jpg · original 4096×2304</div>
+    <div class="blurb">The only front picture — Mars's crevasse-rim vista, used in every build.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="crevasse-left">Left <span class="onlyone">3 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="crevasse-left" data-code="Crevasse Left A">
+  <a class="preview" href="img/crevasse-left-a.jpg" data-full="img/crevasse-left-a.jpg"><img src="img/crevasse-left-a.jpg" alt="Crevasse Left A" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Left A</div>
+    <div class="used">Used in: Oct 27</div>
+    <div class="file">crevasse-left.jpg · original 2048×1152</div>
+    <div class="blurb">First left surround picture (Oct 27), before the alternate.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="crevasse-left" data-code="Crevasse Left B">
+  <a class="preview" href="img/crevasse-left-b.jpg" data-full="img/crevasse-left-b.jpg"><img src="img/crevasse-left-b.jpg" alt="Crevasse Left B" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Left B</div>
+    <div class="used">Used in: Oct 28–r12g, r12l, r12m</div>
+    <div class="file">crevasse-left.jpg · original 2048×1152</div>
+    <div class="blurb">Oct 28 alternate left (curved wall continues the front's crevasse). Used through r12g, and again in r12l/r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="crevasse-left" data-code="Crevasse Left C">
+  <a class="preview" href="img/crevasse-left-c.jpg" data-full="img/crevasse-left-c.jpg"><img src="img/crevasse-left-c.jpg" alt="Crevasse Left C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Left C</div>
+    <div class="used">Used in: r12h–r12k</div>
+    <div class="file">crevasse-left-3584.jpg · original 3584×2016</div>
+    <div class="blurb">r12h–r12k: Mars's 3584×2016 original, un-stretched.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="crevasse-right">Right <span class="onlyone">3 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="crevasse-right" data-code="Crevasse Right A">
+  <a class="preview" href="img/crevasse-right-a.jpg" data-full="img/crevasse-right-a.jpg"><img src="img/crevasse-right-a.jpg" alt="Crevasse Right A" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Right A</div>
+    <div class="used">Used in: Oct 27–r12b, r12l, r12m</div>
+    <div class="file">crevasse-right.jpg · original 2048×1152</div>
+    <div class="blurb">Original right surround (Oct 27). Used through r12b, and again in r12l/r12m (r9 ground — this is the one with the brown smears).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="crevasse-right" data-code="Crevasse Right B">
+  <a class="preview" href="img/crevasse-right-b.jpg" data-full="img/crevasse-right-b.jpg"><img src="img/crevasse-right-b.jpg" alt="Crevasse Right B" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Right B</div>
+    <div class="used">Used in: r12c–r12g</div>
+    <div class="file">crevasse-right.jpg · original 2048×1152</div>
+    <div class="blurb">r12c: red-brown smears muted and lightly sharpened. Used in r12c–r12g.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="crevasse-right" data-code="Crevasse Right C">
+  <a class="preview" href="img/crevasse-right-c.jpg" data-full="img/crevasse-right-c.jpg"><img src="img/crevasse-right-c.jpg" alt="Crevasse Right C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Right C</div>
+    <div class="used">Used in: r12h–r12k</div>
+    <div class="file">crevasse-right-3584.jpg · original 3584×2016</div>
+    <div class="blurb">r12h–r12k: the r12c smear-mute re-run at Mars's 3584×2016 original size.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="crevasse-back">Back <span class="onlyone">2 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="crevasse-back" data-code="Crevasse Back A">
+  <a class="preview" href="img/crevasse-back-a.jpg" data-full="img/crevasse-back-a.jpg"><img src="img/crevasse-back-a.jpg" alt="Crevasse Back A" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Back A</div>
+    <div class="used">Used in: Oct 27–r12b, r12l, r12m</div>
+    <div class="file">crevasse-back.jpg · original 2048×1152</div>
+    <div class="blurb">Original back surround (Oct 27). Used through r12b, and again in r12l/r12m (r9 ground).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="crevasse-back" data-code="Crevasse Back B">
+  <a class="preview" href="img/crevasse-back-b.jpg" data-full="img/crevasse-back-b.jpg"><img src="img/crevasse-back-b.jpg" alt="Crevasse Back B" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Crevasse Back B</div>
+    <div class="used">Used in: r12c–r12k</div>
+    <div class="file">crevasse-back.jpg · original 2048×1152</div>
+    <div class="blurb">r12c: far field lifted at the right-hand join. Used in r12c–r12k.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h2 id="id_canyon">Canyon (handled separately in r12m) <span class="tag">for reference — r12m already puts Canyon back to r12k</span></h2>
+<h3 id="canyon-front">Front <span class="onlyone">4 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="canyon-front" data-code="Canyon Front A">
+  <a class="preview" href="img/canyon-front-a.jpg" data-full="img/canyon-front-a.jpg"><img src="img/canyon-front-a.jpg" alt="Canyon Front A" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Front A</div>
+    <div class="used">Used in: Oct 25</div>
+    <div class="file">canyon-vista.jpg · original 4096×2304</div>
+    <div class="blurb">First Mars canyon vista (Oct 25).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-front" data-code="Canyon Front B">
+  <a class="preview" href="img/canyon-front-b.jpg" data-full="img/canyon-front-b.jpg"><img src="img/canyon-front-b.jpg" alt="Canyon Front B" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Front B</div>
+    <div class="used">Used in: e79759f, r3</div>
+    <div class="file">canyon-vista.jpg · original 4096×2304</div>
+    <div class="blurb">Oct 31 (e79759f): solid rock, sky baked black so stars could not bleed through.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-front" data-code="Canyon Front C">
+  <a class="preview" href="img/canyon-front-c.jpg" data-full="img/canyon-front-c.jpg"><img src="img/canyon-front-c.jpg" alt="Canyon Front C" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Front C</div>
+    <div class="used">Used in: Oct 31 defringe–r9, r12l</div>
+    <div class="file">canyon-vista-r12l-r9.jpg · original 4096×2304</div>
+    <div class="blurb">Oct 31 defringed front (the r9 picture). Used in r9 and r12l.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-front" data-code="Canyon Front D">
+  <a class="preview" href="img/canyon-front-d.jpg" data-full="img/canyon-front-d.jpg"><img src="img/canyon-front-d.jpg" alt="Canyon Front D" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Front D</div>
+    <div class="used">Used in: r10–r12k, r12m</div>
+    <div class="file">canyon-vista.jpg · original 4096×2304</div>
+    <div class="blurb">r10 clean-rim front. Used in live /surface/, r12–r12k, and r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="canyon-left">Left <span class="onlyone">6 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="canyon-left" data-code="Canyon Left A">
+  <a class="preview" href="img/canyon-left-a.jpg" data-full="img/canyon-left-a.jpg"><img src="img/canyon-left-a.jpg" alt="Canyon Left A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Left A</div>
+    <div class="used">Used in: Oct 30</div>
+    <div class="file">canyon-left.jpg · original 1280×720</div>
+    <div class="blurb">Oct 30 first painted left panel.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-left" data-code="Canyon Left B">
+  <a class="preview" href="img/canyon-left-b.jpg" data-full="img/canyon-left-b.jpg"><img src="img/canyon-left-b.jpg" alt="Canyon Left B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Left B</div>
+    <div class="used">Used in: e79759f, r3</div>
+    <div class="file">canyon-left.jpg · original 1280×720</div>
+    <div class="blurb">Oct 31 (e79759f) left, sky baked.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-left" data-code="Canyon Left C">
+  <a class="preview" href="img/canyon-left-c.jpg" data-full="img/canyon-left-c.jpg"><img src="img/canyon-left-c.jpg" alt="Canyon Left C" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Left C</div>
+    <div class="used">Used in: Oct 31 defringe–r9, r12l</div>
+    <div class="file">canyon-left-r12l-r9.jpg · original 1280×720</div>
+    <div class="blurb">Oct 31 defringed left (the r9 picture). Used in r9 and r12l.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-left" data-code="Canyon Left D">
+  <a class="preview" href="img/canyon-left-d.jpg" data-full="img/canyon-left-d.jpg"><img src="img/canyon-left-d.jpg" alt="Canyon Left D" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Left D</div>
+    <div class="used">Used in: r10–r12g, r12i, r12j</div>
+    <div class="file">canyon-left.jpg · original 1280×720</div>
+    <div class="blurb">r10 left. Used in most builds through r12j (except the r12h 5120 upscale).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-left" data-code="Canyon Left E">
+  <a class="preview" href="img/canyon-left-e.jpg" data-full="img/canyon-left-e.jpg"><img src="img/canyon-left-e.jpg" alt="Canyon Left E" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Left E</div>
+    <div class="used">Used in: r12h</div>
+    <div class="file">canyon-left@4x.jpg · original 5120×2880</div>
+    <div class="blurb">r12h 5120 upscale of the r10 1280 left.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-left" data-code="Canyon Left F">
+  <a class="preview" href="img/canyon-left-f.jpg" data-full="img/canyon-left-f.jpg"><img src="img/canyon-left-f.jpg" alt="Canyon Left F" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Left F</div>
+    <div class="used">Used in: r12k, r12m</div>
+    <div class="file">canyon-left-5120-r12k.jpg · original 5120×2880</div>
+    <div class="blurb">r12k regenerated 5120 left; also used in r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="canyon-right">Right <span class="onlyone">6 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="canyon-right" data-code="Canyon Right A">
+  <a class="preview" href="img/canyon-right-a.jpg" data-full="img/canyon-right-a.jpg"><img src="img/canyon-right-a.jpg" alt="Canyon Right A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Right A</div>
+    <div class="used">Used in: Oct 30</div>
+    <div class="file">canyon-right.jpg · original 1280×720</div>
+    <div class="blurb">Oct 30 first painted right panel.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-right" data-code="Canyon Right B">
+  <a class="preview" href="img/canyon-right-b.jpg" data-full="img/canyon-right-b.jpg"><img src="img/canyon-right-b.jpg" alt="Canyon Right B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Right B</div>
+    <div class="used">Used in: e79759f, r3</div>
+    <div class="file">canyon-right.jpg · original 1280×720</div>
+    <div class="blurb">Oct 31 (e79759f) right, sky baked.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-right" data-code="Canyon Right C">
+  <a class="preview" href="img/canyon-right-c.jpg" data-full="img/canyon-right-c.jpg"><img src="img/canyon-right-c.jpg" alt="Canyon Right C" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Right C</div>
+    <div class="used">Used in: Oct 31 defringe–r9, r12l</div>
+    <div class="file">canyon-right-r12l-r9.jpg · original 1280×720</div>
+    <div class="blurb">Oct 31 defringed right (the r9 picture). Used in r9 and r12l.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-right" data-code="Canyon Right D">
+  <a class="preview" href="img/canyon-right-d.jpg" data-full="img/canyon-right-d.jpg"><img src="img/canyon-right-d.jpg" alt="Canyon Right D" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Right D</div>
+    <div class="used">Used in: r10–r12g, r12i, r12j</div>
+    <div class="file">canyon-right.jpg · original 1280×720</div>
+    <div class="blurb">r10 right. Used in most builds through r12j (except the r12h 5120 upscale).</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-right" data-code="Canyon Right E">
+  <a class="preview" href="img/canyon-right-e.jpg" data-full="img/canyon-right-e.jpg"><img src="img/canyon-right-e.jpg" alt="Canyon Right E" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Right E</div>
+    <div class="used">Used in: r12h</div>
+    <div class="file">canyon-right@4x.jpg · original 5120×2880</div>
+    <div class="blurb">r12h 5120 upscale of the r10 1280 right.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-right" data-code="Canyon Right F">
+  <a class="preview" href="img/canyon-right-f.jpg" data-full="img/canyon-right-f.jpg"><img src="img/canyon-right-f.jpg" alt="Canyon Right F" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Right F</div>
+    <div class="used">Used in: r12k, r12m</div>
+    <div class="file">canyon-right-5120-r12k.jpg · original 5120×2880</div>
+    <div class="blurb">r12k regenerated 5120 right; also used in r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+<h3 id="canyon-back">Back <span class="onlyone">6 versions</span></h3>
+<div class="row">
+<article class="card" data-dir="canyon-back" data-code="Canyon Back A">
+  <a class="preview" href="img/canyon-back-a.jpg" data-full="img/canyon-back-a.jpg"><img src="img/canyon-back-a.jpg" alt="Canyon Back A" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Back A</div>
+    <div class="used">Used in: Oct 30</div>
+    <div class="file">canyon-back.jpg · original 1280×720</div>
+    <div class="blurb">Oct 30 first painted back panel.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-back" data-code="Canyon Back B">
+  <a class="preview" href="img/canyon-back-b.jpg" data-full="img/canyon-back-b.jpg"><img src="img/canyon-back-b.jpg" alt="Canyon Back B" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Back B</div>
+    <div class="used">Used in: e79759f, r3</div>
+    <div class="file">canyon-back.jpg · original 1280×720</div>
+    <div class="blurb">Oct 31 (e79759f) back, sky baked.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-back" data-code="Canyon Back C">
+  <a class="preview" href="img/canyon-back-c.jpg" data-full="img/canyon-back-c.jpg"><img src="img/canyon-back-c.jpg" alt="Canyon Back C" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Back C</div>
+    <div class="used">Used in: Oct 31 defringe–r9, r12l</div>
+    <div class="file">canyon-back-r12l-r9.jpg · original 1280×720</div>
+    <div class="blurb">Oct 31 defringed back (the r9 picture). Used in r9 and r12l.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-back" data-code="Canyon Back D">
+  <a class="preview" href="img/canyon-back-d.jpg" data-full="img/canyon-back-d.jpg"><img src="img/canyon-back-d.jpg" alt="Canyon Back D" width="1280" height="720"></a>
+  <div class="meta">
+    <div class="code">Canyon Back D</div>
+    <div class="used">Used in: r10–r12g</div>
+    <div class="file">canyon-back.jpg · original 1280×720</div>
+    <div class="blurb">r10 back. Used through r12g.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-back" data-code="Canyon Back E">
+  <a class="preview" href="img/canyon-back-e.jpg" data-full="img/canyon-back-e.jpg"><img src="img/canyon-back-e.jpg" alt="Canyon Back E" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Back E</div>
+    <div class="used">Used in: r12h</div>
+    <div class="file">canyon-back@4x.jpg · original 5120×2880</div>
+    <div class="blurb">r12h 5120 upscale of the r10 1280 back.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+<article class="card" data-dir="canyon-back" data-code="Canyon Back F">
+  <a class="preview" href="img/canyon-back-f.jpg" data-full="img/canyon-back-f.jpg"><img src="img/canyon-back-f.jpg" alt="Canyon Back F" width="1600" height="900"></a>
+  <div class="meta">
+    <div class="code">Canyon Back F</div>
+    <div class="used">Used in: r12i–r12k, r12m</div>
+    <div class="file">canyon-back-4096.jpg · original 4096×2304</div>
+    <div class="blurb">r12i 4096 back from a genuine source upscale; also used in r12j, r12k and r12m.</div>
+    <button type="button" class="select">Select this one</button>
+  </div>
+</article>
+</div>
+
+  </main>
+  <div id="lb" role="dialog" aria-label="Larger preview">
+    <div class="closehint">Tap the picture or this text to close</div>
+    <img alt="Larger preview">
+  </div>
+  <script>
+    (function () {
+      var lb = document.getElementById('lb');
+      var lbImg = lb.querySelector('img');
+      document.querySelectorAll('a.preview').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+          e.preventDefault();
+          lbImg.src = a.getAttribute('data-full');
+          lb.classList.add('open');
+        });
+      });
+      function closeLb() {
+        lb.classList.remove('open');
+        lbImg.removeAttribute('src');
+      }
+      lb.addEventListener('click', closeLb);
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeLb();
+      });
+
+      var picks = {};
+      var picklist = document.getElementById('picklist');
+      function renderPicks() {
+        var keys = Object.keys(picks);
+        if (!keys.length) { picklist.textContent = 'none yet'; return; }
+        picklist.textContent = keys.map(function (k) { return picks[k]; }).join(' · ');
+      }
+      document.querySelectorAll('.card').forEach(function (card) {
+        var btn = card.querySelector('button.select');
+        btn.addEventListener('click', function () {
+          var dir = card.getAttribute('data-dir');
+          document.querySelectorAll('.card[data-dir="' + dir + '"]').forEach(function (c) {
+            c.classList.remove('selected');
+            c.querySelector('button.select').textContent = 'Select this one';
+          });
+          card.classList.add('selected');
+          btn.textContent = 'Selected';
+          picks[dir] = card.getAttribute('data-code');
+          renderPicks();
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
