@@ -1,0 +1,559 @@
+/* EUROPA — Ridge Base test b1: base on legs over a trench, sized for rig E-7 (three.js r160, WebXR). Built from Enceladus e4's engine.
+ *
+ * Single standalone spot built on the Europa surface pattern (surface-r12g):
+ *   - front: Scott's Saturn picture on a curved panel around the eye, its painted horizon at eye level
+ *   - sides / back: real-star black sky (Hipparcos stars.json + faint dust) and a soft blue horizon glow
+ *     matched to the glow in the picture, so the panel's side fades land on the same sky
+ *   - ground: real 3D smooth ice (the seamless no-crack ground from Fissure / Crevasse), coloured and lit
+ *     to match the painted plain, which the panel's bottom edge fades into
+ * Nothing here is shared with /surface/ — this folder is self-contained.
+ */
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+/* ---------------------------------------------------------- config */
+const BUILD = 'Ridge Base b2 \u00b7 b1 in brushed metal, polished trench';
+const SCENE_VER = 'base b2, metal look';
+const PLAYER_HEIGHT = 1.7, EYE = PLAYER_HEIGHT;
+// Sun: the picture lights Saturn and the ice lumps from the right, a little from behind the viewer, low.
+const SUN_DIR = new THREE.Vector3(0.55, 0.42, 0.35).normalize();   // the Europa surface sun
+
+/* Front picture (assets/saturn-front.jpg, 4096x2304, from Scott's 7168x4032 4x upscale).
+ *   arcDeg   horizontal wrap. 104 deg: the rings span ~87 deg, Saturn's globe ~27 deg tall.
+ *   horizon  painted horizon row, fraction down from the top (measured 0.852 across the frame).
+ *   rows are laid out ANGLE-linear (elevation proportional to picture row, same deg/px as horizontally),
+ *   so Saturn keeps its shape high in the sky instead of being squashed the way a straight cylinder
+ *   (rows linear in height) compresses everything above ~30 deg. */
+const FRONT = { url: './assets/saturn-front.jpg?v=e1', arcDeg: 104, horizon: 0.852, radius: 300,
+  sideFade: 0.055, groundSideFade: 0.16, bottomFade: 0.035, bright: 1.0 };
+
+/* ---------------------------------------------------------- renderer / scene */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 5000);
+const rig = new THREE.Group();
+rig.add(camera); camera.position.set(0, PLAYER_HEIGHT, 0);
+scene.add(rig);
+
+/* ---------------------------------------------------------- lights */
+const sun = new THREE.DirectionalLight(0xfff6ea, 3.0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 10; sun.shadow.camera.far = 400;
+sun.shadow.camera.left = -45; sun.shadow.camera.right = 45; sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45;
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+const hemi = new THREE.HemisphereLight(0x2a3a50, 0x10161e, 0.45);       // starlight + ice bounce, cool
+scene.add(hemi);
+const saturnShine = new THREE.DirectionalLight(0xe8c8a0, 0.18);   // warm Jupiter-shine from Jupiter's side         // warm light reflected off Saturn, ahead and above
+saturnShine.position.set(-0.52, 0.30, -0.80).multiplyScalar(100);
+scene.add(saturnShine);
+
+/* ---------------------------------------------------------- stars (same round sprites as the surface builds) */
+const STAR_ROUND_SCALE = 1.25, STAR_MIN_PX = 2.2, STAR_GLOW_TAIL = 0.05, STAR_EDGE_POW = 1.0, DUST_EDGE_POW = 3.0;
+function roundStarMaterial(size, glow = false, edgePow = STAR_EDGE_POW) {
+  const px = Math.max(size * STAR_ROUND_SCALE, STAR_MIN_PX);
+  const gain = (size / px) ** 2 / 0.249;
+  return new THREE.ShaderMaterial({
+    uniforms: { uSize: { value: px }, uGain: { value: gain }, uGlow: { value: glow ? STAR_GLOW_TAIL : 0 }, uEdgePow: { value: edgePow } },
+    vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `
+      uniform float uSize, uEdgePow; varying vec3 vCol;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float c = max(-normalize(mv.xyz).z, 0.0);
+        vCol = color * pow(c, uEdgePow);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = uSize;
+      }`,
+    fragmentShader: `
+      uniform float uGain, uGlow; varying vec3 vCol;
+      void main() {
+        float r = length(gl_PointCoord - 0.5);
+        float a = exp(-12.0 * r * r) + uGlow * exp(-4.0 * r * r) * (1.0 - 2.0 * r);
+        a *= 1.0 - smoothstep(0.42, 0.5, r);
+        if (a < 0.002) discard;
+        gl_FragColor = vec4(vCol * a * uGain, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`
+  });
+}
+const skyRig = new THREE.Group();
+scene.add(skyRig);
+{
+  let starData = null;
+  try { const res = await fetch('./assets/stars.json'); if (!res.ok) throw new Error('HTTP ' + res.status); starData = await res.json(); }
+  catch (e) { console.warn('[enceladus] star catalog missing', e); }
+  const STAR_R = 1560;
+  if (starData && starData.stars && starData.stars.length) {
+    const tiers = [{ count: 60, size: 2.0, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    let offset = 0;
+    for (const t of tiers) {
+      const n = Math.min(t.count, starData.stars.length - offset); if (n <= 0) break;
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const s = starData.stars[offset + i];
+        let y = s[1]; if (y < -0.04) y = Math.abs(y);
+        pos.set([s[0] * STAR_R, y * STAR_R, s[2] * STAR_R], i * 3);
+        col.set([s[3], s[4], s[5]], i * 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const p = new THREE.Points(g, roundStarMaterial(t.size, t.glow)); p.renderOrder = 1; skyRig.add(p);
+      offset += n;
+    }
+  }
+  // faint procedural dust, so the open sky has the same fine sprinkle as the picture's painted sky
+  const N = 9000, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < N; i++) {
+    const u = rnd() * 2 - 1, th = rnd() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+    const y = Math.abs(u);                                     // upper hemisphere only
+    pos.set([r * Math.cos(th) * STAR_R, y * STAR_R, r * Math.sin(th) * STAR_R], i * 3);
+    const b = 0.05 + 0.10 * rnd() ** 3, w = rnd();
+    col.set([b * (0.9 + 0.1 * w), b * 0.95, b * (1.05 - 0.1 * w)], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const dust = new THREE.Points(g, roundStarMaterial(0.8, false, DUST_EDGE_POW)); dust.renderOrder = 1.5; skyRig.add(dust);
+}
+// distant Sun: a small hard point at SUN_DIR (Saturn is ~9.5 AU out, the Sun is a tiny brilliant disc)
+{
+  const d = new THREE.Mesh(new THREE.SphereGeometry(2.6, 12, 12), new THREE.MeshBasicMaterial({ color: 0xfff8ee, toneMapped: false }));
+  d.position.copy(SUN_DIR).multiplyScalar(1500); skyRig.add(d);
+}
+// horizon glow: the picture has a thin cold-blue glow just above its horizon (sRGB ~40,46,55 at the line, gone by ~4 deg up).
+// The same glow all the way round, so the panel's side fades blend into matching sky.
+{
+  const R = 900, top = THREE.MathUtils.degToRad(7), bot = THREE.MathUtils.degToRad(-0.6);
+  const yT = R * Math.tan(top), yB = R * Math.tan(bot);
+  const geo = new THREE.CylinderGeometry(R, R, yT - yB, 96, 1, true);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTop: { value: top }, uBot: { value: bot } },
+    side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+    vertexShader: `varying float vE; uniform float uTop, uBot;
+      void main(){ vE = mix(uBot, uTop, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying float vE;
+      void main(){ float e = degrees(max(vE, 0.0));
+        vec3 c = vec3(0.021, 0.027, 0.038) * exp(-e / 1.25);          // linear; ~sRGB (40,46,55) at the line
+        gl_FragColor = vec4(c, 1.0);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(geo, mat); m.position.y = (yT + yB) / 2; m.renderOrder = 2; m.frustumCulled = false;
+  skyRig.add(m);
+}
+
+/* ---------------------------------------------------------- ground: smooth seamless ice */
+function makeIceTextures(size = 1024) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const bv = document.createElement('canvas'); bv.width = bv.height = size;
+  const x = cv.getContext('2d'), b = bv.getContext('2d');
+  // periodic gradient (light at the tile edges) so the texture wraps without a step — the r12d smooth ground
+  const g = x.createLinearGradient(0, 0, 0, size);
+  g.addColorStop(0, '#e4ebf1'); g.addColorStop(0.5, '#d4dee7'); g.addColorStop(1, '#e4ebf1');
+  x.fillStyle = g; x.fillRect(0, 0, size, size);
+  b.fillStyle = '#808080'; b.fillRect(0, 0, size, size);
+  let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const wrapDraw = (ctx, fn) => { for (const ox of [-size, 0, size]) for (const oy of [-size, 0, size]) fn(ctx, ox, oy); };
+  for (let i = 0; i < 260; i++) {                         // soft blotches (drawn wrapped -> seamless)
+    const r = 20 + rnd() * 90, cx = rnd() * size, cy = rnd() * size, e = 0.4 + rnd() * 0.6, rot = rnd() * 3;
+    const dk = rnd() < 0.4, fill = dk ? `rgba(${150 + rnd() * 30 | 0},${160 + rnd() * 30 | 0},${172 + rnd() * 30 | 0},0.07)` : `rgba(${225 + rnd() * 30 | 0},${230 + rnd() * 25 | 0},${238 + rnd() * 17 | 0},0.10)`;
+    wrapDraw(x, (c, ox, oy) => { c.fillStyle = fill; c.beginPath(); c.ellipse(cx + ox, cy + oy, r, r * e, rot, 0, 7); c.fill(); });
+  }
+  for (let i = 0; i < 700; i++) {                         // gentle bump lumps (frost texture, no cracks)
+    const r = 4 + rnd() * 26, cx = rnd() * size, cy = rnd() * size, v = rnd() < 0.5 ? 255 : 0;
+    wrapDraw(b, (c, ox, oy) => { const gr = c.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, r);
+      gr.addColorStop(0, `rgba(${v},${v},${v},0.10)`); gr.addColorStop(1, `rgba(${v},${v},${v},0)`); c.fillStyle = gr; c.fillRect(cx + ox - r, cy + oy - r, 2 * r, 2 * r); });
+  }
+  for (let i = 0; i < 2600; i++) { x.fillStyle = `rgba(255,255,255,${rnd() * 0.10})`; x.fillRect(rnd() * size, rnd() * size, 1.6, 1.6); }
+  const map = new THREE.CanvasTexture(cv); map.wrapS = map.wrapT = THREE.RepeatWrapping; map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const bump = new THREE.CanvasTexture(bv); bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+  return { map, bump };
+}
+const ice = makeIceTextures(1024);
+// e2: Scott - fill the bare ground left/right/behind by repeating ONE exact patch of the picture's own ice: a flat-snow patch
+// from the bottom of his Saturn picture (7168x4032 4x, x 4300-5000, 75 rows above the bottom edge, stretched back to square),
+// made seamless (half-offset crossfade, left-right then top-bottom) and set to the old ground's brightness. The same tile
+// repeats everywhere; the frost bump map stays for close-up shading.
+// (b1: Enceladus picture tile not used; procedural ice)
+const GROUND_SIZE = 4000, TILE_M = 15.6;
+ice.map.repeat.setScalar(GROUND_SIZE / TILE_M); ice.bump.repeat.setScalar(GROUND_SIZE / TILE_M);
+// colour tuned so the 3D ice at the panel's bottom edge matches the painted plain (sRGB ~145,149,154, slightly cool)
+const groundMat = new THREE.MeshStandardMaterial({ map: ice.map, bumpMap: ice.bump, bumpScale: 0.5,
+  roughness: 0.75, metalness: 0.0, color: new THREE.Color(0xf4f7fb) });
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE), groundMat); ground.visible = false;   // b1: replaced by the trench ground below
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+scene.add(ground);
+// low snow mounds like the lumps in the painted plain (stay well under the horizon; the front ones past ~11 m sit under the picture)
+{
+  const mounds = new THREE.Group(); scene.add(mounds);
+  let seed = 23; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const geo = new THREE.SphereGeometry(1, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2);
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) {                    // lumpy, not perfect domes
+    const vx = p.getX(i), vy = p.getY(i), vz = p.getZ(i);
+    const n = 1 + 0.18 * Math.sin(vx * 5.1 + vz * 3.7) * Math.cos(vz * 4.3 - vx * 2.2) + 0.08 * Math.sin(vx * 11 + vz * 9);
+    p.setXYZ(i, vx * n, vy * n, vz * n);
+  }
+  geo.computeVertexNormals();
+  // clustered like the picture's lumpy ridges: ~45 clusters of 1-5 lumps
+  const spots = [];
+  for (let c = 0; c < 45; c++) {
+    const a = rnd() * Math.PI * 2, r = 8 + 170 * rnd() ** 1.5, k = 1 + (rnd() * 5 | 0);
+    for (let j = 0; j < k; j++) spots.push([Math.cos(a) * r + (rnd() - 0.5) * r * 0.12, Math.sin(a) * r + (rnd() - 0.5) * r * 0.12, r]);
+  }
+  for (const [sx, sz, r] of spots) {
+    const a = Math.atan2(sz, sx);
+    const w = (0.3 + rnd() * 1.1) * (1 + r / 70), h = w * (0.18 + rnd() * 0.22);
+    if (r < 45 || Math.abs(sx) < 30) continue;   // b1: keep the trench and its rims clear   // e4: no near mounds - up close they read as dark slabs with smeared shadows (Scott's plateau photo)
+    const m = new THREE.Mesh(geo, groundMat);
+    m.scale.set(w, h, w * (0.5 + rnd() * 0.6)); m.rotation.y = rnd() * Math.PI;
+    m.position.set(sx, -0.02, sz);
+    m.castShadow = m.receiveShadow = true; mounds.add(m);
+  }
+}
+
+/* ---------------------------------------------------------- front picture panel */
+function addPanel(o) {
+  const R = o.radius, arc = THREE.MathUtils.degToRad(o.arcDeg), vert = arc * 9 / 16;   // same deg per pixel both ways
+  const SEG_H = 64;
+  const geo = new THREE.CylinderGeometry(R, R, 1, 96, SEG_H, true, Math.PI - arc / 2, arc);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const e = (uv.getY(i) - (1 - o.horizon)) * vert;        // elevation of this picture row (0 = painted horizon)
+    pos.setY(i, EYE + R * Math.tan(e));
+  }
+  pos.needsUpdate = true; geo.computeBoundingSphere();
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uMap: { value: null }, uBright: { value: o.bright }, uSide: { value: o.sideFade }, uSideG: { value: o.groundSideFade }, uHor: { value: 1 - o.horizon }, uBot: { value: o.bottomFade } },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = vec2(1.0 - uv.x, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform sampler2D uMap; uniform float uBright, uSide, uSideG, uHor, uBot;
+      void main(){
+        vec4 t = texture2D(uMap, vUv);
+        float w = mix(uSideG, uSide, smoothstep(uHor - 0.004, uHor + 0.02, vUv.y));   // wide fade over the painted plain, narrow in the sky
+        float a = smoothstep(0.0, w, vUv.x) * smoothstep(1.0, 1.0 - w, vUv.x) * smoothstep(0.0, uBot, vUv.y);
+        gl_FragColor = vec4(t.rgb * uBright, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.y = -THREE.MathUtils.degToRad(o.yawDeg || 0);
+  mesh.renderOrder = 12; mesh.frustumCulled = false; mesh.visible = false;
+  scene.add(mesh);                                       // world-fixed (snap turning lets you turn away); re-centred on the eye every frame
+  return mesh;
+}
+const front = addPanel(FRONT);
+{
+  const t = await new THREE.TextureLoader().loadAsync(FRONT.url).catch(e => { console.warn('[enceladus] front picture missing', e); return null; });
+  if (t) {
+    t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    renderer.initTexture(t);
+    front.material.uniforms.uMap.value = t; front.visible = true;
+  }
+}
+
+/* ---------------------------------------------------------- e3: painted ice all the way around */
+// Scott: the sides and back looked bare next to the painted front. The picture's own ground band (rows 1940-2304 of
+// saturn-front.jpg; plume glow at the horizon patched out; left/right edges crossfaded so it wraps with no seam) is laid on a
+// full 360-degree ring at the same degrees-per-pixel and horizon as the front picture, repeated 4 times (90 deg each).
+// It sits under the front panel (front draws on top, its side fades now blend into this ice instead of bare ground);
+// only the ground shows, everything above the horizon is transparent so the stars stay exactly as they were.
+const RING = { url: './assets/enceladus-ring.jpg', rows: 364, picRows: 2304, copies: 4 };
+const ring = (() => {
+  const R = FRONT.radius - 2, vert = THREE.MathUtils.degToRad(FRONT.arcDeg) * 9 / 16, hor = 1 - FRONT.horizon, frac = RING.rows / RING.picRows;
+  const geo = new THREE.CylinderGeometry(R, R, 1, 256, 32, true);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) pos.setY(i, EYE + R * Math.tan((uv.getY(i) * frac - hor) * vert));
+  pos.needsUpdate = true; geo.computeBoundingSphere();
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uMap: { value: null }, uFrac: { value: frac }, uHor: { value: hor }, uBot: { value: FRONT.bottomFade }, uN: { value: RING.copies }, uRingFade: { value: 0.11 } },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform sampler2D uMap; uniform float uFrac, uHor, uBot, uN, uRingFade;
+      void main(){
+        vec4 t = texture2D(uMap, vec2((1.0 - vUv.x) * uN, vUv.y))   /* e4: no fract() - it made a shimmering 1-px line at each of the 4 joins */;
+        float v = vUv.y * uFrac;                                  // row in front-picture terms (0 = bottom)
+        float a = pow(smoothstep(0.0, uRingFade, v), 1.6) *   /* e4: long soft fade into the near snow instead of a hard ledge */ (1.0 - smoothstep(uHor - 0.001, uHor + 0.004, v));
+        gl_FragColor = vec4(t.rgb, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(geo, mat); m.renderOrder = 11; m.frustumCulled = false; m.visible = false; scene.add(m);
+  return m;
+})();
+{
+  const t = await new THREE.TextureLoader().loadAsync(RING.url).catch(e => { console.warn('[enceladus] ring picture missing', e); return null; });
+  if (t) {
+    t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    renderer.initTexture(t); ring.material.uniforms.uMap.value = t; ring.visible = true;
+  }
+}
+
+/* ---------------------------------------------------------- b2: metal look */
+// Reflection map for the metal only (not the ice plain): black starry sky above, the bright ice horizon band, ice below,
+// a warm patch toward the Sun. Without something to reflect, metal just renders dark.
+const metalEnv = (() => {
+  const W = 1024, H = 512, c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, H);
+  gr.addColorStop(0, '#020306'); gr.addColorStop(0.44, '#0a0d14'); gr.addColorStop(0.49, '#9aa4b2'); gr.addColorStop(0.5, '#e8ecf0');
+  gr.addColorStop(0.62, '#b8bec6'); gr.addColorStop(1, '#7a8088');
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 500; i++) { g.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.7})`; g.fillRect(Math.random() * W, Math.random() * H * 0.45, 1, 1); }
+  const sd = SUN_DIR.clone().normalize();
+  const sx = W * (0.5 + Math.atan2(sd.x, -sd.z) / (2 * Math.PI)), sy = H * (0.5 - Math.asin(sd.y) / Math.PI);
+  const rg = g.createRadialGradient(sx, sy, 0, sx, sy, 60); rg.addColorStop(0, 'rgba(255,240,210,1)'); rg.addColorStop(1, 'rgba(255,220,170,0)');
+  g.fillStyle = rg; g.fillRect(sx - 60, sy - 60, 120, 120);
+  const t = new THREE.CanvasTexture(c); t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace;
+  const pm = new THREE.PMREMGenerator(renderer); const rt = pm.fromEquirectangular(t); pm.dispose(); t.dispose(); return rt.texture;
+})();
+// brushed-metal grain: fine streaks in one direction, used as a roughness map
+const brushed = (() => {
+  const N = 512, c = document.createElement('canvas'); c.width = c.height = N; const g = c.getContext('2d');
+  g.fillStyle = '#808080'; g.fillRect(0, 0, N, N);
+  for (let i = 0; i < 2600; i++) { const v = 90 + Math.random() * 90 | 0; g.fillStyle = `rgba(${v},${v},${v},0.5)`; g.fillRect(Math.random() * N, Math.random() * N, 40 + Math.random() * 220, 1); }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(10, 10); return t;
+})();
+const trenchMat = groundMat.clone();              // polished ice sheen on the trench floor and walls only
+trenchMat.roughness = 0.38; trenchMat.metalness = 0.12; trenchMat.envMap = metalEnv; trenchMat.envMapIntensity = 0.55;
+
+/* ---------------------------------------------------------- b1: Ridge base on legs over the trench (no rig yet) */
+/* Sizes (metres). Scott's Europa Ice Mining Rig E-7 picture, scaled from its lit windows (~1.5 m) and deck railings (~1.1 m):
+ *   rig ~22 wide over its treads, ~40 long, ~22 tall to the cabin roof (masts extra).
+ * Ridge platform numbers are the floor: >= 1.6 m up, >= 18 m across the top, >= 24 m at the bottom, eye 1.7 m above the floor.
+ *   trench:  36 wide, 10 deep, straight, running away from you (-z) and behind you (+z)
+ *   legs:    4 columns standing on the rims, 43 m apart across the trench, 20 m apart along it, 15 m tall above the rims
+ *   deck:    46 x 24, top 25 m above the trench floor; underside clearance 23.8 m (rig 22 m + 1.8 m) over the full 36 m width
+ *   cabin:   20 x 14 x 4 m on the deck, glass all round; a 8 x 5 m glass floor panel in front of you to look straight down
+ */
+const TRENCH_W = 36, TRENCH_D = 10, DECK_TOP = 15, DECK_T = 1.2, DECK_W = 46, DECK_L = 24;
+const LEG_X = 21.5, LEG_Z = 10, LEG_S = 1.6, CAB_W = 20, CAB_L = 14, CAB_H = 4, HOLE_W = 8, HOLE_L = 5;
+const BASE_SPAWN = new THREE.Vector3(0, DECK_TOP, 4.5);
+// ground with the trench cut into it (world-scaled UVs so the ice texture matches everywhere)
+function worldUV(geo, mesh) {
+  mesh.updateMatrixWorld(true); const pos = geo.attributes.position, uv = geo.attributes.uv, v = new THREE.Vector3(), n = new THREE.Vector3();
+  geo.computeVertexNormals(); const nn = geo.attributes.normal;
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld); n.fromBufferAttribute(nn, i).transformDirection(mesh.matrixWorld);
+    const a = Math.abs(n.x) > 0.5 ? [v.z, v.y] : [v.x, v.z];
+    uv.setXY(i, a[0] / GROUND_SIZE + 0.5, a[1] / GROUND_SIZE + 0.5);
+  }
+  uv.needsUpdate = true;
+}
+function iceSlab(w, h, x, y, z, rx = -Math.PI / 2, ry = 0, mat = groundMat) {
+  const g = new THREE.PlaneGeometry(w, h, 1, 1), m = new THREE.Mesh(g, mat);
+  m.position.set(x, y, z); m.rotation.set(rx, ry, 0, 'YXZ'); m.receiveShadow = true; m.castShadow = false;
+  scene.add(m); worldUV(g, m); return m;
+}
+{
+  const half = GROUND_SIZE / 2, side = half - TRENCH_W / 2;
+  iceSlab(side, GROUND_SIZE, -(TRENCH_W / 2 + side / 2), 0, 0);              // left rim plain
+  iceSlab(side, GROUND_SIZE, (TRENCH_W / 2 + side / 2), 0, 0);               // right rim plain
+  iceSlab(TRENCH_W, GROUND_SIZE, 0, -TRENCH_D, 0, -Math.PI / 2, 0, trenchMat);                          // trench floor
+  iceSlab(GROUND_SIZE, TRENCH_D, -TRENCH_W / 2, -TRENCH_D / 2, 0, 0, Math.PI / 2, trenchMat);   // left wall, faces into the trench
+  iceSlab(GROUND_SIZE, TRENCH_D, TRENCH_W / 2, -TRENCH_D / 2, 0, 0, -Math.PI / 2, trenchMat);   // right wall
+}
+// Jupiter (same texture, place and size as the Europa surface: ~12 deg across, 33 deg left of forward)
+{
+  const t = await new THREE.TextureLoader().loadAsync('./assets/jupiter-hi.jpg').catch(() => null);
+  if (t) {
+    t.colorSpace = THREE.SRGBColorSpace;
+    const D = 900, Rj = D * Math.tan(THREE.MathUtils.degToRad(6));
+    const j = new THREE.Mesh(new THREE.SphereGeometry(Rj, 64, 48), new THREE.MeshBasicMaterial({ map: t }));
+    j.position.set(-0.52, 0.30, -0.80).normalize().multiplyScalar(D); skyRig.add(j);
+  }
+}
+// the base
+const base = new THREE.Group(); scene.add(base);
+{
+  const metal = new THREE.MeshPhysicalMaterial({ color: 0xa8b0ba, metalness: 1, roughness: 0.3, roughnessMap: brushed, anisotropy: 0.7, envMap: metalEnv, envMapIntensity: 1.25 });   // brushed steel
+  const dark = new THREE.MeshPhysicalMaterial({ color: 0x5a636e, metalness: 1, roughness: 0.26, roughnessMap: brushed, anisotropy: 0.5, envMap: metalEnv, envMapIntensity: 1.1 });   // gunmetal
+  const floorM = new THREE.MeshPhysicalMaterial({ color: 0x8e96a0, metalness: 0.9, roughness: 0.42, roughnessMap: brushed, anisotropy: 0.6, envMap: metalEnv, envMapIntensity: 0.9 });   // brushed deck plate
+  const glass = new THREE.MeshStandardMaterial({ color: 0x9fc6e0, roughness: 0.02, metalness: 0.1, transparent: true, opacity: 0.14, depthWrite: false, envMap: metalEnv, envMapIntensity: 1.4 });
+  const amber = new THREE.MeshStandardMaterial({ color: 0x221a10, emissive: 0xffb860, emissiveIntensity: 1.4 });
+  const box = (w, h, d, x, y, z, m = metal, cast = true) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.castShadow = cast; b.receiveShadow = true; base.add(b); return b; };
+  const dy = DECK_TOP - DECK_T / 2;
+  // deck slab with the glass-floor hole in the middle (4 pieces)
+  box(DECK_W, DECK_T, (DECK_L - HOLE_L) / 2, 0, dy, -(HOLE_L / 2 + (DECK_L - HOLE_L) / 4), floorM);
+  box(DECK_W, DECK_T, (DECK_L - HOLE_L) / 2, 0, dy, (HOLE_L / 2 + (DECK_L - HOLE_L) / 4), floorM);
+  box((DECK_W - HOLE_W) / 2, DECK_T, HOLE_L, -(HOLE_W / 2 + (DECK_W - HOLE_W) / 4), dy, 0, floorM);
+  box((DECK_W - HOLE_W) / 2, DECK_T, HOLE_L, (HOLE_W / 2 + (DECK_W - HOLE_W) / 4), dy, 0, floorM);
+  const gf = box(HOLE_W, 0.06, HOLE_L, 0, DECK_TOP - 0.03, 0, glass, false);
+  box(HOLE_W + 0.3, 0.08, 0.15, 0, DECK_TOP, -HOLE_L / 2, dark); box(HOLE_W + 0.3, 0.08, 0.15, 0, DECK_TOP, HOLE_L / 2, dark);
+  box(0.15, 0.08, HOLE_L, -HOLE_W / 2, DECK_TOP, 0, dark); box(0.15, 0.08, HOLE_L, HOLE_W / 2, DECK_TOP, 0, dark);
+  box(0.1, 0.08, HOLE_L, 0, DECK_TOP, 0, dark);                                   // one glazing bar
+  // under-deck girders across the trench (the rig passes under these)
+  for (const z of [-LEG_Z, -LEG_Z / 2 + 0.5, LEG_Z / 2 - 0.5, LEG_Z]) if (Math.abs(z) > HOLE_L / 2) box(DECK_W, 0.6, 0.5, 0, DECK_TOP - DECK_T - 0.3, z, dark);
+  // legs: 4 columns on the rims, with cross-bracing along the trench direction
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      box(LEG_S, DECK_TOP - DECK_T, LEG_S, sx * LEG_X, (DECK_TOP - DECK_T) / 2, sz * LEG_Z);
+      box(LEG_S * 2.2, 0.5, LEG_S * 2.2, sx * LEG_X, 0.25, sz * LEG_Z, dark);   // foot pad
+    }
+    const L = Math.hypot(2 * LEG_Z, DECK_TOP - DECK_T - 1);
+    for (const k of [-1, 1]) {
+      const b = box(0.35, L, 0.35, sx * LEG_X, (DECK_TOP - DECK_T) / 2, 0, dark);
+      b.rotation.x = k * Math.atan2(2 * LEG_Z, DECK_TOP - DECK_T - 1);
+    }
+  }
+  // railing round the deck edge
+  const rail = (w, d, x, z) => { box(w, 0.06, d, x, DECK_TOP + 1.1, z, dark, false); box(w, 0.04, d, x, DECK_TOP + 0.55, z, dark, false); };
+  rail(DECK_W, 0.06, 0, -DECK_L / 2); rail(DECK_W, 0.06, 0, DECK_L / 2); rail(0.06, DECK_L, -DECK_W / 2, 0); rail(0.06, DECK_L, DECK_W / 2, 0);
+  for (let x = -DECK_W / 2; x <= DECK_W / 2 + 0.01; x += 2.3) { box(0.06, 1.1, 0.06, x, DECK_TOP + 0.55, -DECK_L / 2, dark, false); box(0.06, 1.1, 0.06, x, DECK_TOP + 0.55, DECK_L / 2, dark, false); }
+  for (let z = -DECK_L / 2 + 2.4; z < DECK_L / 2; z += 2.4) { box(0.06, 1.1, 0.06, -DECK_W / 2, DECK_TOP + 0.55, z, dark, false); box(0.06, 1.1, 0.06, DECK_W / 2, DECK_TOP + 0.55, z, dark, false); }
+  // cabin: glass walls, posts every 2.5 m, sill and header bands, roof
+  const cy = DECK_TOP + CAB_H / 2;
+  box(CAB_W, 0.25, CAB_L, 0, DECK_TOP + CAB_H + 0.125, 0, metal);                // roof
+  for (const [w, d, x, z] of [[CAB_W, 0.05, 0, -CAB_L / 2], [CAB_W, 0.05, 0, CAB_L / 2], [0.05, CAB_L, -CAB_W / 2, 0], [0.05, CAB_L, CAB_W / 2, 0]]) {
+    box(w, CAB_H - 1.0, d, x, DECK_TOP + 0.6 + (CAB_H - 1.0) / 2, z, glass, false);
+    box(w + (d > 1 ? 0.2 : 0), 0.6, d > 1 ? 0.2 : d + 0.2, x, DECK_TOP + 0.3, z, dark);   // sill
+    box(w + (d > 1 ? 0.2 : 0), 0.4, d > 1 ? 0.2 : d + 0.2, x, DECK_TOP + CAB_H - 0.2, z, dark); // header
+  }
+  for (let x = -CAB_W / 2; x <= CAB_W / 2 + 0.01; x += 2.5) for (const z of [-CAB_L / 2, CAB_L / 2]) box(0.18, CAB_H, 0.18, x, cy, z, dark);
+  for (let z = -CAB_L / 2 + 2.33; z < CAB_L / 2; z += 2.33) for (const x of [-CAB_W / 2, CAB_W / 2]) box(0.18, CAB_H, 0.18, x, cy, z, dark);
+  // a door on the back wall out to the open deck (just a frame for now) and warm ceiling light strips
+  for (const x of [-4, 0, 4]) box(1.6, 0.05, 0.25, x, DECK_TOP + CAB_H - 0.03, 0, amber, false);
+  const lamp = new THREE.PointLight(0xffc98a, 45, 30, 1.4); lamp.position.set(0, DECK_TOP + CAB_H - 0.5, 0); base.add(lamp);
+  // small amber deck lights at the leg tops so the base reads at night
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(0.5, 0.3, 0.5, sx * LEG_X, DECK_TOP + 0.15, sz * LEG_Z, amber, false);
+}
+{ // b2: polished steel edge strips along both trench lips
+  const lip = new THREE.MeshPhysicalMaterial({ color: 0xb4bcc6, metalness: 1, roughness: 0.22, roughnessMap: brushed, anisotropy: 0.8, envMap: metalEnv, envMapIntensity: 1.3 });
+  for (const sx of [-1, 1]) { const m = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.25, 1200), lip); m.position.set(sx * (TRENCH_W / 2 + 0.5), 0.12, 0); m.receiveShadow = true; scene.add(m); }
+}
+rig.position.copy(BASE_SPAWN);
+
+/* ---------------------------------------------------------- HUD */
+document.querySelector('#hud .build').textContent = BUILD;
+document.querySelector('#hud .loc').textContent = `Ridge Base · ${SCENE_VER}`;
+
+/* ---------------------------------------------------------- helmet rim (suit presence, as on the surface) */
+{
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.055, 12, 48, Math.PI * 1.15),
+    new THREE.MeshStandardMaterial({ color: 0x1a222c, roughness: 0.7, metalness: 0.3 }));
+  rim.renderOrder = 100; rim.position.set(0, -0.12, -0.32); rim.rotation.set(0.15, 0, Math.PI * 0.925);
+  camera.add(rim);
+}
+
+/* ---------------------------------------------------------- in-headset label (scene name, version, build) */
+const vrLabel = (() => {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 150;
+  const g = c.getContext('2d');
+  g.beginPath(); g.roundRect(8, 8, 1008, 134, 28); g.fillStyle = 'rgba(4,14,24,0.78)'; g.fill(); g.strokeStyle = '#4f8fc0'; g.lineWidth = 3; g.stroke();
+  g.textAlign = 'center'; g.fillStyle = '#fff'; g.font = 'bold 54px sans-serif'; g.fillText('Europa \u2014 Ridge Base (test)', 512, 70);
+  g.fillStyle = '#9fd8ff'; g.font = '36px sans-serif'; g.fillText(`${SCENE_VER}  ·  ${BUILD}`, 512, 118);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5 * 150 / 1024),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+  m.renderOrder = 300; m.position.set(0, -0.27, -0.8); m.frustumCulled = false; m.visible = false; camera.add(m);
+  let pinned = true;
+  return { toggle() { pinned = !pinned; }, update() { m.visible = renderer.xr.isPresenting && pinned; } };
+})();
+
+/* ---------------------------------------------------------- XR: snap turn, A/X toggles the label */
+const SNAP_TURN_DEG = 30;
+function snapTurn(deg) {
+  const before = new THREE.Vector3(); camera.getWorldPosition(before);
+  rig.rotation.y += THREE.MathUtils.degToRad(deg); rig.updateMatrixWorld(true);
+  const after = new THREE.Vector3(); camera.getWorldPosition(after);
+  rig.position.x += before.x - after.x; rig.position.z += before.z - after.z; rig.updateMatrixWorld(true);
+}
+for (let i = 0; i < 2; i++) {
+  const ctl = renderer.xr.getController(i);
+  const ray = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -4)]),
+    new THREE.LineBasicMaterial({ color: 0x54c8ff, transparent: true, opacity: 0.6 }));
+  ctl.add(ray); rig.add(ctl);
+}
+const was = new Map(), stickArmed = new Map();
+function pollPads() {
+  const sess = renderer.xr.getSession && renderer.xr.getSession(); if (!sess) return;
+  for (const src of sess.inputSources) {
+    const gp = src.gamepad; if (!gp) continue;
+    const prev = was.get(src) || [];
+    if (gp.buttons[4] && gp.buttons[4].pressed && !prev[4]) vrLabel.toggle();
+    const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);
+    const armed = stickArmed.get(src) !== false;
+    if (armed && Math.abs(sx) > 0.7) { snapTurn(sx > 0 ? -SNAP_TURN_DEG : SNAP_TURN_DEG); stickArmed.set(src, false); }
+    else if (!armed && Math.abs(sx) < 0.3) stickArmed.set(src, true);
+    was.set(src, gp.buttons.map(b => b.pressed));
+  }
+}
+renderer.xr.addEventListener('sessionstart', () => { rig.rotation.y = 0; rig.position.copy(BASE_SPAWN); });   // start inside the cabin, facing along the trench
+
+/* ---------------------------------------------------------- desktop look + Enter VR */
+let yaw = 0, pitch = 0, roll = 0, dragging = false, px = 0, py = 0;
+const dom = renderer.domElement;
+dom.addEventListener('pointerdown', e => { dragging = true; px = e.clientX; py = e.clientY; });
+window.addEventListener('pointerup', () => { dragging = false; });
+window.addEventListener('pointermove', e => {
+  if (!dragging || renderer.xr.isPresenting) return;
+  yaw -= (e.clientX - px) * 0.0032; pitch -= (e.clientY - py) * 0.0028;
+  pitch = THREE.MathUtils.clamp(pitch, -1.2, 1.2); px = e.clientX; py = e.clientY;
+});
+{
+  const overlay = document.getElementById('overlay'), btn = document.getElementById('enter-vr');
+  overlay.addEventListener('click', e => { if (e.target !== btn) overlay.classList.add('hidden'); });
+  if ('xr' in navigator) {
+    navigator.xr.isSessionSupported('immersive-vr').then(ok => {
+      if (ok) {
+        btn.disabled = false; btn.textContent = 'Enter VR';
+        btn.onclick = () => overlay.classList.add('hidden');
+        document.body.appendChild(VRButton.createButton(renderer));
+        const real = document.querySelector('#VRButton'); real.style.display = 'none';
+        btn.addEventListener('click', () => real.click(), { once: true });
+      } else btn.textContent = 'VR not available — desktop mode';
+    }).catch(() => { btn.textContent = 'VR not available — desktop mode'; });
+  } else btn.textContent = 'VR not available — desktop mode';
+  renderer.xr.addEventListener('sessionstart', () => overlay.classList.add('hidden'));
+  renderer.xr.addEventListener('sessionend', () => overlay.classList.remove('hidden'));
+}
+
+/* ---------------------------------------------------------- fps meter */
+const fpsEl = document.querySelector('#hud .fps');
+let frames = 0, lastT = performance.now(), ema = 60;
+function tickFps(now) {
+  frames++;
+  if (now - lastT >= 500) {
+    const fps = frames * 1000 / (now - lastT); ema = ema * 0.6 + fps * 0.4;
+    fpsEl.textContent = `${ema.toFixed(0)} fps`;
+    fpsEl.style.color = ema >= 85 ? '#7dffa8' : ema >= 60 ? '#ffd47d' : '#ff8d7d';
+    frames = 0; lastT = now;
+  }
+}
+
+/* ---------------------------------------------------------- main loop */
+window.__enceladus = { build: BUILD, look: (y, p = 0, r = 0) => { yaw = y; pitch = p; roll = r; },
+  head: (x = 0, y = 0, z = 0) => camera.position.set(x, PLAYER_HEIGHT + y, z), at: (x, y, z) => rig.position.set(x, y, z),
+  dbg: { ring, THREE, scene, camera, renderer, ground, groundMat, front, sun, rim: camera.children[0] } };
+const _skyPos = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  const now = performance.now(); tickFps(now);
+  if (!renderer.xr.isPresenting) { camera.rotation.set(0, 0, 0); camera.rotateY(yaw); camera.rotateX(pitch); if (roll) camera.rotateZ(roll); }
+  sun.position.copy(rig.position).addScaledVector(SUN_DIR, 160); sun.target.position.copy(rig.position); sun.target.updateMatrixWorld();
+  camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
+  front.position.set(_skyPos.x, _skyPos.y - EYE, _skyPos.z); ring.position.copy(front.position);   // panel centred on the eye (horizon stays at eye level, no parallax)
+  if (renderer.xr.isPresenting) pollPads();
+  vrLabel.update();
+  renderer.render(scene, camera);
+});
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
