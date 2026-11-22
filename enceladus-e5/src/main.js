@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 
 /* ---------------------------------------------------------- config */
-const BUILD = 'Enceladus e5 \u00b7 e4 + Rings of Gold music with volume control';
+const BUILD = 'Enceladus e5 \u00b7 e4 + Rings of Gold music with volume control + comet';
 const SCENE_VER = 'v1 Saturn front, star sky, 3D ice';
 const PLAYER_HEIGHT = 1.7, EYE = PLAYER_HEIGHT;
 // Sun: the picture lights Saturn and the ice lumps from the right, a little from behind the viewer, low.
@@ -394,6 +394,78 @@ window.addEventListener('pointermove', e => {
   renderer.xr.addEventListener('sessionend', () => overlay.classList.remove('hidden'));
 }
 
+/* e5: the same comet as Europa surface r12t. Enceladus has no air either, so no burning
+ * meteor trail: a small bright coma with a faint dust tail lit by the sun, the tail always pointing away from the
+ * sun. Timing modelled on the beach shooting stars (occasional, random, faint, brief) but slower, so it reads as a
+ * comet: fades in, drifts a couple of degrees, fades out over ~6-9 s, then 20-50 s until the next. Lives in skyRig.
+ * Here it only appears to your sides and behind you, never over the Saturn picture in front. */
+const COMET_R = 1400;
+const comet = (() => {
+  const g = new THREE.BufferGeometry();
+  const N = 24, pos = new Float32Array((N + 1) * 2 * 3), uv = new Float32Array((N + 1) * 2 * 2), idx = [];
+  for (let i = 0; i <= N; i++) { uv.set([i / N, 0, i / N, 1], i * 4); if (i < N) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } }
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setIndex(idx);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uFade: { value: 0 } },
+    transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform float uFade;
+      void main(){
+        float u = vUv.x, v = vUv.y * 2.0 - 1.0;            // u: 0 head -> 1 tail end; v: across
+        float w = 0.22 + 0.78 * sqrt(u);                    // tail widens away from the head
+        float across = exp(-pow(v / w, 2.0) * 3.0);
+        float along = pow(1.0 - u, 1.6);                    // dims toward the tail end
+        float coma = exp(-u * 22.0) * exp(-v * v * 5.0);    // bright little head
+        float i = (along * across * 0.55 + coma * 1.4) * uFade;
+        vec3 c = mix(vec3(0.85, 0.92, 1.0), vec3(1.0, 0.97, 0.9), u);   // blue-white coma, pale sunlit dust
+        gl_FragColor = vec4(c * i, 1.0);
+      }`
+  });
+  const mesh = new THREE.Mesh(g, mat); mesh.frustumCulled = false; mesh.visible = false; mesh.renderOrder = 1.6;   // after stars/dust, before the Saturn picture and ice ring (they cover it)
+  skyRig.add(mesh);
+  return { mesh, mat, pos, g, N, active: false, t0: 0, dur: 7, from: new THREE.Vector3(), to: new THREE.Vector3(), len: 0.12, wid: 0.01 };
+})();
+let nextCometAt = 6 + Math.random() * 8;   // first one after a short beat, then 20-50 s gaps
+function spawnComet(t) {
+  const d2r = Math.PI / 180, antiSun = SUN_DIR.clone().negate();
+  let dir;
+  for (let k = 0; k < 30; k++) {
+    const yaw = (60 + Math.random() * 240) * d2r, elev = (25 + Math.random() * 40) * d2r;
+    dir = new THREE.Vector3(Math.sin(yaw) * Math.cos(elev), Math.sin(elev), -Math.cos(yaw) * Math.cos(elev));
+    if (dir.angleTo(SUN_DIR) > 35 * d2r) break;   // e5: not in the sun's glare; yaw kept off the Saturn picture ahead
+  }
+  // slow drift of 1.5-3 deg in a random sky direction
+  const side = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+  const up = new THREE.Vector3().crossVectors(side, dir).normalize();
+  const a = Math.random() * Math.PI * 2, span = (1.5 + Math.random() * 1.5) * d2r;
+  const drift = side.multiplyScalar(Math.cos(a)).addScaledVector(up, Math.sin(a));
+  comet.from.copy(dir); comet.to.copy(dir).addScaledVector(drift, span).normalize();
+  comet.len = (6 + Math.random() * 5) * d2r;    // tail 6-11 deg long
+  comet.wid = (0.8 + Math.random() * 0.4) * d2r; // ~0.8-1.2 deg wide at the end
+  comet.t0 = t; comet.dur = 6 + Math.random() * 3; comet.active = true; comet.mesh.visible = true;
+}
+const _cP = new THREE.Vector3(), _cT = new THREE.Vector3(), _cW = new THREE.Vector3(), _cQ = new THREE.Vector3();
+function tickComet(t) {
+  if (!comet.active && t >= nextCometAt) { spawnComet(t); nextCometAt = t + comet.dur + 20 + Math.random() * 30; }
+  if (!comet.active) return;
+  const p = (t - comet.t0) / comet.dur;
+  if (p >= 1) { comet.active = false; comet.mesh.visible = false; return; }
+  const fade = p < 0.25 ? p / 0.25 : p > 0.65 ? 1 - (p - 0.65) / 0.35 : 1;
+  comet.mat.uniforms.uFade.value = fade * fade * (3 - 2 * fade) * 0.9;   // faint
+  _cP.lerpVectors(comet.from, comet.to, p).normalize();
+  _cT.copy(SUN_DIR).negate().addScaledVector(_cP, SUN_DIR.dot(_cP)).normalize();   // anti-sun direction on the sky at the head
+  _cW.crossVectors(_cP, _cT).normalize();
+  for (let i = 0; i <= comet.N; i++) {
+    const u = i / comet.N, w = comet.wid * (0.2 + 0.8 * Math.sqrt(u));
+    _cQ.copy(_cP).addScaledVector(_cT, comet.len * u);
+    for (let s = 0; s < 2; s++) {
+      const q = _cQ.clone().addScaledVector(_cW, s ? w : -w).normalize().multiplyScalar(COMET_R);
+      comet.pos.set([q.x, q.y, q.z], (i * 2 + s) * 3);
+    }
+  }
+  comet.g.attributes.position.needsUpdate = true;
+}
+
 /* ---------------------------------------------------------- e5: music (Rings of Gold, atmospheric, by Mars) + volume */
 // Loops quietly. Starts on the first click (Enter VR, the page, or the desktop slider): browsers need a tap before sound.
 // In VR: a small panel low in front of you (look down). Point and pull the trigger on  -  /  +  or the speaker to mute.
@@ -504,7 +576,7 @@ function tickFps(now) {
 /* ---------------------------------------------------------- main loop */
 window.__enceladus = { build: BUILD, look: (y, p = 0, r = 0) => { yaw = y; pitch = p; roll = r; },
   head: (x = 0, y = 0, z = 0) => camera.position.set(x, PLAYER_HEIGHT + y, z),
-  music, setVol, toggleMute, musicPanel, get vol() { return vol; }, get muted() { return muted; },
+  comet: () => { nextCometAt = 0; }, music, setVol, toggleMute, musicPanel, get vol() { return vol; }, get muted() { return muted; },
   dbg: { ring, THREE, scene, camera, renderer, ground, groundMat, front, sun, rim: camera.children[0] } };
 const _skyPos = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
@@ -514,6 +586,7 @@ renderer.setAnimationLoop(() => {
   camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
   front.position.set(_skyPos.x, _skyPos.y - EYE, _skyPos.z); ring.position.copy(front.position);   // panel centred on the eye (horizon stays at eye level, no parallax)
   if (renderer.xr.isPresenting) { pollPads(); tickMusicVR(); }
+  tickComet(now * 0.001);   // e5: occasional sunlit comet
   vrLabel.update();
   renderer.render(scene, camera);
 });
