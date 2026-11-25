@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>EUROPA — Ridge Base (test b13-legbox)</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color: #cfe3f5; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px; background: radial-gradient(ellipse at center, #06121f 0%, #000 75%);
+    z-index: 10; text-align: center; padding: 24px; transition: opacity .6s; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h1 { font-size: 28px; letter-spacing: 6px; margin: 0; color: #9fd8ff; font-weight: 300; }
+  #overlay p { max-width: 520px; line-height: 1.6; color: #8fa8c0; font-size: 15px; margin: 0; }
+  #enter-vr { font-size: 17px; padding: 14px 42px; border-radius: 999px; cursor: pointer;
+    background: #0e2a44; color: #cfe9ff; border: 1px solid #2f5b85; letter-spacing: 1px; }
+  #enter-vr:hover:not(:disabled) { background: #16405f; }
+  #enter-vr:disabled { opacity: .45; cursor: default; }
+  #hud { position: fixed; top: 12px; left: 12px; z-index: 5; font-size: 13px; color: #9fd8ff;
+    background: rgba(4, 12, 20, .55); border: 1px solid rgba(80, 140, 190, .35);
+    border-radius: 8px; padding: 8px 12px; line-height: 1.7; pointer-events: none; }
+  #hud .loc { color: #fff; }
+  #teleport-ui { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 5;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 10px;
+    width: max-content; max-width: calc(100vw - 24px); }
+  #teleport-ui button { font-size: 14px; padding: 10px 18px; border-radius: 999px; cursor: pointer;
+    background: rgba(10, 28, 46, .8); color: #cfe9ff; border: 1px solid #2f5b85; }
+  #teleport-ui button.active { background: #1b4a73; border-color: #6fb7ef; }
+  #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none;
+    transition: opacity .18s; z-index: 8; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 4;
+    background: radial-gradient(ellipse at center, transparent 58%, rgba(0,0,0,.55) 100%); }
+  #music-ui { position: fixed; right: 12px; bottom: 66px; z-index: 6; display: flex; align-items: center; gap: 8px;
+    background: rgba(4, 12, 20, .7); border: 1px solid rgba(80, 140, 190, .45); border-radius: 999px; padding: 6px 14px;
+    font-size: 13px; color: #cfe9ff; }
+  #music-ui button { background: none; border: 0; font-size: 18px; cursor: pointer; padding: 0 2px; }
+  #music-ui input { width: 120px; accent-color: #f3d27a; }
+  #music-ui .p { min-width: 34px; text-align: right; }
+  #music-ui .t { cursor: pointer; text-decoration: underline dotted; }
+  #music-panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 9; display: none;
+    background: rgba(4, 14, 24, .92); border: 1px solid #6fb7ef; border-radius: 16px; padding: 18px 22px; min-width: 320px;
+    color: #e8f4ff; font-size: 15px; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
+  #music-panel.open { display: block; }
+  #music-panel h3 { margin: 0 0 12px; font-weight: 500; color: #f3d27a; letter-spacing: 1px; }
+  #music-panel .row { display: flex; gap: 8px; margin: 8px 0; align-items: center; }
+  #music-panel button { font-size: 14px; padding: 9px 14px; border-radius: 999px; cursor: pointer; flex: 1;
+    background: rgba(20, 50, 80, .9); color: #cfe9ff; border: 1px solid #2f5b85; }
+  #music-panel button.on { background: #6b5317; border-color: #f3d27a; color: #fff6dc; }
+  #music-panel .vol { flex: 1.4; text-align: center; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+<div id="hud">RIDGE BASE · <span class="build">build</span><br><span class="fps">-- fps</span><br><span class="loc">Ridge Base</span></div>
+<div id="fade"></div>
+<div id="overlay">
+  <h1>EUROPA · RIDGE BASE</h1>
+  <p>Test base b13-legbox: same as b13-scale (lander ×1.35, rig ×1.1), with one change: the four gunmetal foot pads under the base legs no longer have the columns passing through them. Each column now sits on its pad (pad top stays at 0.5 m; column top still meets the deck), and the pad bottoms are sunk 2 cm into the ice so they do not flicker against the rim. Everything else as b13-scale — everything from b5–b11 in one: the E-7 rig crawls the trench with rolling treads and its grinding sound, stays in sight far down the trench both ways, a gold science lander sits on the ice beside the base with its bay open, a ship orbits slowly overhead, and music plays (Two Moons Rising or Rings of Gold).<br>
+     Teleport: point a controller at a glowing ring or its label and pull the trigger (VR), or keys 1–9 and 0, the buttons at the bottom, or click a ring (desktop). Rings: 1 Cabin · 2 Front railing · 3 Rear railing · 4 Left edge · 5 Right edge · 6 Glass floor · 7 Living quarters · 8 Table · 9 Roof deck · 0 Lander.<br>
+     Music: click or trigger the music screen on the cabin wall or the quarters' back wall (or press B/Y in VR) to open the music panel: pick the track, volume − / +, mute, and rig sound on/off. Desktop also has the slider bottom-right. Rig sound: M key or the button bottom-right.<br>
+     Desktop: drag to look. Click anywhere outside the button to look around without VR.</p>
+  <button id="enter-vr" disabled>checking VR…</button>
+  <p style="font-size:12px">Serve over http://localhost (or any https) — WebXR needs a secure context.<br>
+     Jupiter: NASA/JPL-Caltech/SwRI/MSSS JunoCam. Stars: Hipparcos catalog. Music: "Two Moons Rising (atmospheric)" and "Rings of Gold (atmospheric)" by Mars.</p>
+</div>
+<script>
+setTimeout(function () {
+  var btn = document.getElementById('enter-vr');
+  if (btn && btn.disabled && btn.textContent.indexOf('checking') === 0) {
+    btn.textContent = 'Still checking… this page must be served via http://localhost (run: npx serve) — not opened by double-clicking the file';
+  }
+}, 6000);
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
