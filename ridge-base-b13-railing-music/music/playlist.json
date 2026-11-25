@@ -1,0 +1,6 @@
+{
+  "tracks": [
+    { "name": "Under the Ice", "file": "../../assets/music/under-the-ice.mp3" },
+    { "name": "Vent Pulse", "file": "../../assets/music/vent-pulse.mp3" }
+  ]
+}
