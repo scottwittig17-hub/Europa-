@@ -17,6 +17,7 @@ import { buildSnowTrench } from './snowbanks.js';
 import { buildLander } from './lander.js';
 import { buildShip } from './ship.js';
 import { buildClipper } from './clipper.js';
+import { buildEvaRack } from './eva-suits.js';
 import { prepGlassMaterial, makeWindowGlass, aabbFromCenterSize, registerGlass, registerSolid, reportGlassFits, postCenters, paneSpans, GLASS_INSET } from './glass-fit.js';
 import { buildInfoScreens, PAGES } from './info-screens.js';
 
@@ -660,6 +661,7 @@ function tickFade(now) {
 const _e = new THREE.Euler(), _hp = new THREE.Vector3();
 function placeAt(i) {
   const s = SPOTS[i];
+  evaResetFlight(); evaFloorY = s.to[1];
   if (renderer.xr.isPresenting) {                  // keep the real head pose; turn the play space so you face the spot's view
     _e.setFromQuaternion(camera.quaternion, 'YXZ');
     rig.rotation.set(0, s.yaw - _e.y, 0); rig.position.set(s.to[0], s.to[1], s.to[2]); rig.updateMatrixWorld(true);
@@ -677,8 +679,11 @@ function padUnder(ctl) {
 }
 const tpCtls = [renderer.xr.getController(0), renderer.xr.getController(1)];
 for (const c of tpCtls) c.addEventListener('select', () => {   // b12: the music panel and the music screens win over rings
-  if (panelZone(c)) return; const h = padUnder(c), s = screenUnder(c) || info.hit(ctlRay(c));   // b17: info screens also block rings behind them
-  if (s && (!h || s.distance <= h.dist)) return; if (h) teleportTo(h.pad.spot); });   // b9: the music panel wins when you point at it
+  if (panelZone(c)) return;
+  const ray = ctlRay(c), eh = eva.hit(ray), h = padUnder(c), s = screenUnder(c) || info.hit(ray);
+  if (s && (!h || s.distance <= h.dist) && (!eh || s.distance <= eh.distance)) return;
+  if (eh && (!h || eh.distance <= h.dist)) { eva.press(ray); return; }
+  if (h) teleportTo(h.pad.spot); });   // b9: the music panel wins when you point at it
 function tickPads(now) {
   camera.getWorldPosition(_hp);
   const pulse = 0.6 + 0.25 * Math.sin(now * 0.003); ringMat.opacity = pulse;
@@ -707,11 +712,12 @@ const tpButtons = [];
   renderer.domElement.addEventListener('pointerup', e => {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
     ndc.set(e.clientX / window.innerWidth * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1); mray.setFromCamera(ndc, camera);
-    const ih = info.hit(mray), h0 = mray.intersectObjects(padHits, false).find(o => o.object.parent.visible);
-    if (ih && (!h0 || ih.distance <= h0.distance)) { info.press(mray); return; }   // b17: click a wall screen = next page
+    const ih = info.hit(mray), eh = eva.hit(mray), h0 = mray.intersectObjects(padHits, false).find(o => o.object.parent.visible);
+    if (ih && (!h0 || ih.distance <= h0.distance) && (!eh || ih.distance <= eh.distance)) { info.press(mray); return; }   // b17: click a wall screen = next page
     const sh = mray.intersectObjects(musicScreens, false)[0];
     const h = mray.intersectObjects(padHits, false).find(o => o.object.parent.visible);
-    if (sh && (!h || sh.distance <= h.distance)) { openDeskPanel(); return; }   // b12: a music screen opens the panel, never a teleport
+    if (sh && (!h || sh.distance <= h.distance) && (!eh || sh.distance <= eh.distance)) { openDeskPanel(); return; }   // b12: a music screen opens the panel, never a teleport
+    if (eh && (!h || eh.distance <= h.distance)) { eva.press(mray); return; }
     if (h) teleportTo(h.object.userData.pad.spot);
   });
 }
@@ -760,10 +766,12 @@ for (let i = 0; i < 2; i++) {
 const was = new Map(), stickArmed = new Map();
 function pollPads() {
   const sess = renderer.xr.getSession && renderer.xr.getSession(); if (!sess) return;
+  evaInput.squeeze = false;
   for (const src of sess.inputSources) {
     const gp = src.gamepad; if (!gp) continue;
     const prev = was.get(src) || [];
     if (gp.buttons[4] && gp.buttons[4].pressed && !prev[4]) vrLabel.toggle();
+    if (gp.buttons[1] && gp.buttons[1].pressed) evaInput.squeeze = true;
     const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);
     const armed = stickArmed.get(src) !== false;
     if (armed && Math.abs(sx) > 0.7) { snapTurn(sx > 0 ? -SNAP_TURN_DEG : SNAP_TURN_DEG); stickArmed.set(src, false); }
@@ -771,7 +779,7 @@ function pollPads() {
     was.set(src, gp.buttons.map(b => b.pressed));
   }
 }
-renderer.xr.addEventListener('sessionstart', () => { rig.rotation.y = 0; rig.position.copy(BASE_SPAWN); currentSpot = 0; });   // start inside the cabin, facing along the trench
+renderer.xr.addEventListener('sessionstart', () => { rig.rotation.y = 0; rig.position.copy(BASE_SPAWN); currentSpot = 0; evaResetFlight(); evaFloorY = DECK_TOP; });   // start inside the cabin, facing along the trench
 
 /* ---------------------------------------------------------- desktop look + Enter VR */
 let yaw = 0, pitch = 0, roll = 0, dragging = false, px = 0, py = 0;
@@ -1106,6 +1114,152 @@ const info = buildInfoScreens({
   }
 }
 
+const eva = buildEvaRack({ scene, envMap: metalEnv, deckTop: DECK_TOP, cabL: CAB_L });
+
+/* ---------------------------------------------------------- EVA pack thrusters (Europa g = 1.315 m/s²)
+ * Hold Space / the Thruster button / VR squeeze for a gentle upward hop once you have a suit
+ * on and you are outside. Release and you float back down with a cushioned landing.
+ * Height is capped at 15 m. No camera tilt, no horizontal boost. */
+const EVA_G = 1.315, EVA_THRUST = 3.6, EVA_V_UP = 2.2, EVA_V_DOWN = 2.2, EVA_CEIL = 15, EVA_CUSHION = 1.6;
+let evaVy = 0, evaFloorY = DECK_TOP, evaHold = 0;
+const evaInput = { key: false, btn: false, squeeze: false };
+function evaSuited() { return !!eva.worn; }
+function evaOutside() {
+  const { x, y, z } = rig.position;
+  const inCabin = Math.abs(x) < CAB_W / 2 - 0.2 && Math.abs(z) < CAB_L / 2 - 0.2 && y >= DECK_TOP - 0.25 && y < DECK_TOP + CAB_H + 0.25;
+  const inQ = x > -8.1 && x < 8.1 && z > -1.1 && z < 7.1 && y >= ROOF_TOP - 0.25 && y < ROOF_TOP + 3.2;
+  return !inCabin && !inQ;
+}
+function evaWantThrust() { return evaInput.key || evaInput.btn || evaInput.squeeze; }
+
+const evaHudEl = document.createElement('div');
+evaHudEl.id = 'eva-hud';
+evaHudEl.style.cssText = 'position:fixed;left:12px;bottom:16px;z-index:6;font-size:13px;padding:8px 14px;border-radius:999px;background:rgba(10,28,46,.8);color:#cfe9ff;border:1px solid #2f5b85;pointer-events:none;display:none';
+document.body.appendChild(evaHudEl);
+const thrustBtn = document.createElement('button');
+thrustBtn.id = 'thrust-btn';
+thrustBtn.textContent = 'Thruster (Space)';
+thrustBtn.style.cssText = 'position:fixed;right:12px;bottom:166px;z-index:6;font-size:13px;padding:8px 14px;border-radius:999px;cursor:pointer;background:rgba(10,28,46,.8);color:#cfe9ff;border:1px solid #2f5b85';
+thrustBtn.onpointerdown = ev => { ev.preventDefault(); ev.stopPropagation(); evaInput.btn = true; };
+const clearBtn = ev => { ev.preventDefault(); ev.stopPropagation(); evaInput.btn = false; };
+thrustBtn.onpointerup = thrustBtn.onpointerleave = thrustBtn.onpointercancel = clearBtn;
+document.body.appendChild(thrustBtn);
+
+const evaVrHud = (() => {
+  const c = document.createElement('canvas'); c.width = 768; c.height = 128;
+  const g = c.getContext('2d');
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.42 * 128 / 768),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+  m.renderOrder = 301; m.position.set(0, -0.36, -0.8); m.frustumCulled = false; m.visible = false; camera.add(m);
+  return {
+    draw(text, thrusting) {
+      g.clearRect(0, 0, 768, 128);
+      g.beginPath(); g.roundRect(8, 8, 752, 112, 24);
+      g.fillStyle = thrusting ? 'rgba(40,28,10,0.82)' : 'rgba(4,14,24,0.78)'; g.fill();
+      g.strokeStyle = thrusting ? '#f3d27a' : '#4f8fc0'; g.lineWidth = 3; g.stroke();
+      g.fillStyle = '#fff'; g.font = '700 48px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(text, 384, 64);
+      tex.needsUpdate = true;
+    },
+    set visible(v) { m.visible = v; },
+  };
+})();
+
+// subtle first-person visor + two soft thrust glows (no camera tilt)
+const evaVisor = new THREE.Mesh(new THREE.SphereGeometry(0.28, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.45),
+  new THREE.MeshBasicMaterial({ color: 0xc8a44a, transparent: true, opacity: 0.0, depthTest: false, depthWrite: false, side: THREE.BackSide, toneMapped: false }));
+evaVisor.rotation.x = Math.PI / 2; evaVisor.position.set(0, 0.02, -0.18); evaVisor.renderOrder = 99; camera.add(evaVisor);
+const evaFlames = [];
+for (const s of [-1, 1]) {
+  const f = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffc070, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+  f.position.set(s * 0.08, -0.28, 0.12); f.rotation.x = Math.PI; f.renderOrder = 101; f.visible = false; camera.add(f); evaFlames.push(f);
+}
+
+let evaHiss = null;
+function evaEnsureHiss() {
+  if (evaHiss) return evaHiss;
+  const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+  const ac = new AC();
+  const buf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+  const data = buf.getChannelData(0); for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.5;
+  const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 880; bp.Q.value = 0.65;
+  const gain = ac.createGain(); gain.gain.value = 0;
+  src.connect(bp); bp.connect(gain); gain.connect(ac.destination); src.start();
+  evaHiss = { ac, gain }; return evaHiss;
+}
+function evaResetFlight() {
+  evaVy = 0; evaHold = 0; evaInput.key = evaInput.btn = evaInput.squeeze = false;
+}
+
+function tickEva(dt) {
+  const suited = evaSuited(), outside = evaOutside();
+  const can = suited && outside;
+  const want = can && evaWantThrust();
+  // smooth the hold so acceleration never steps
+  const tgt = want ? 1 : 0;
+  evaHold += (tgt - evaHold) * Math.min(1, dt * 6);
+
+  if (can) {
+    const alt = rig.position.y - evaFloorY;
+    if (evaHold > 0.01) {
+      const headroom = EVA_CEIL - alt;
+      const taper = headroom < 2.5 ? Math.max(0, headroom / 2.5) : 1;
+      evaVy += EVA_THRUST * evaHold * taper * dt;
+    }
+    evaVy -= EVA_G * dt;
+    evaVy = Math.max(-EVA_V_DOWN, Math.min(EVA_V_UP, evaVy));
+    if (alt < EVA_CUSHION && evaVy < 0) {
+      const t = 1 - alt / EVA_CUSHION;
+      evaVy += (-evaVy) * t * t * 6 * dt;          // cushioned settle, no thud
+    }
+    rig.position.y += evaVy * dt;
+    if (rig.position.y > evaFloorY + EVA_CEIL) { rig.position.y = evaFloorY + EVA_CEIL; if (evaVy > 0) evaVy = 0; }
+    if (rig.position.y <= evaFloorY) { rig.position.y = evaFloorY; evaVy = 0; }
+  } else if (evaVy !== 0 || rig.position.y !== evaFloorY) {
+    // if you hang the suit mid-air, keep the soft descent
+    evaHold = 0;
+    evaVy -= EVA_G * dt;
+    evaVy = Math.max(-EVA_V_DOWN, evaVy);
+    rig.position.y += evaVy * dt;
+    if (rig.position.y <= evaFloorY) { rig.position.y = evaFloorY; evaVy = 0; }
+  }
+
+  const altNow = Math.max(0, rig.position.y - evaFloorY);
+  const thrusting = evaHold > 0.05 && can;
+  const visor = suited ? (thrusting ? 0.10 : 0.06) : 0;
+  evaVisor.material.opacity += (visor - evaVisor.material.opacity) * Math.min(1, dt * 8);
+  evaVisor.visible = evaVisor.material.opacity > 0.01;
+  const flame = thrusting ? 0.55 : 0;
+  for (const f of evaFlames) { f.visible = flame > 0.02; f.material.opacity = flame; }
+
+  const hiss = evaEnsureHiss();
+  if (hiss) {
+    if (hiss.ac.state === 'suspended') hiss.ac.resume().catch(() => {});
+    const g = thrusting ? 0.045 : 0;
+    hiss.gain.gain.setTargetAtTime(g, hiss.ac.currentTime, 0.05);
+  }
+
+  const label = suited
+    ? (can ? `EVA · ${eva.worn}   ${altNow.toFixed(1)} m${thrusting ? '   ↑' : ''}` : `EVA · ${eva.worn}   (go outside to thrust)`)
+    : '';
+  evaHudEl.style.display = suited ? 'block' : 'none';
+  if (suited) evaHudEl.textContent = label;
+  evaVrHud.visible = suited && renderer.xr.isPresenting;
+  if (suited) evaVrHud.draw(label, thrusting);
+  thrustBtn.style.borderColor = thrusting ? '#f3d27a' : '#2f5b85';
+  thrustBtn.style.color = can ? '#fff6dc' : '#8fa8c0';
+}
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); evaInput.key = true; }
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); evaInput.key = false; }
+});
+
 function drawScreens() {
   const g = screenCanvas.getContext('2d'), W = 640, H = 360;
   const gr = g.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#1a1206'); gr.addColorStop(1, '#06121f'); g.fillStyle = gr; g.fillRect(0, 0, W, H);
@@ -1273,7 +1427,7 @@ renderer.setAnimationLoop(() => {
   camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
   front.position.set(_skyPos.x, _skyPos.y - EYE, _skyPos.z); ring.position.copy(front.position);   // panel centred on the eye (horizon stays at eye level, no parallax)
   if (renderer.xr.isPresenting) { pollPads(); tickMusicVR(); }
-  { const t = now * 0.001, dt = Math.min(0.1, t - (tickRig.last || t)); tickRig.last = t; tickRig(t, dt); ship.tick(dt); clipper.tick(dt); info.tick(dt); tickPads(now); tickFade(now);
+  { const t = now * 0.001, dt = Math.min(0.1, t - (tickRig.last || t)); tickRig.last = t; tickRig(t, dt); ship.tick(dt); clipper.tick(dt); info.tick(dt); tickEva(dt); tickPads(now); tickFade(now);
     if (!tickRig.scr || t - tickRig.scr > 1) { tickRig.scr = t; quarters.updateLive(rigZ); } }
   vrLabel.update();
   renderer.render(scene, camera);
