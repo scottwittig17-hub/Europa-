@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>EUROPA — Ridge Base b17-combined</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color: #cfe3f5; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px; background: radial-gradient(ellipse at center, #06121f 0%, #000 75%);
+    z-index: 10; text-align: center; padding: 24px; transition: opacity .6s; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h1 { font-size: 28px; letter-spacing: 6px; margin: 0; color: #9fd8ff; font-weight: 300; }
+  #overlay p { max-width: 520px; line-height: 1.6; color: #8fa8c0; font-size: 15px; margin: 0; }
+  #enter-vr { font-size: 17px; padding: 14px 42px; border-radius: 999px; cursor: pointer;
+    background: #0e2a44; color: #cfe9ff; border: 1px solid #2f5b85; letter-spacing: 1px; }
+  #enter-vr:hover:not(:disabled) { background: #16405f; }
+  #enter-vr:disabled { opacity: .45; cursor: default; }
+  #hud { position: fixed; top: 12px; left: 12px; z-index: 5; font-size: 13px; color: #9fd8ff;
+    background: rgba(4, 12, 20, .55); border: 1px solid rgba(80, 140, 190, .35);
+    border-radius: 8px; padding: 8px 12px; line-height: 1.7; pointer-events: none; }
+  #hud .loc { color: #fff; }
+  #teleport-ui { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 5;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 10px;
+    width: max-content; max-width: calc(100vw - 24px); }
+  #teleport-ui button { font-size: 14px; padding: 10px 18px; border-radius: 999px; cursor: pointer;
+    background: rgba(10, 28, 46, .8); color: #cfe9ff; border: 1px solid #2f5b85; }
+  #teleport-ui button.active { background: #1b4a73; border-color: #6fb7ef; }
+  #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none;
+    transition: opacity .18s; z-index: 8; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 4;
+    background: radial-gradient(ellipse at center, transparent 58%, rgba(0,0,0,.55) 100%); }
+  #music-ui { position: fixed; right: 12px; bottom: 66px; z-index: 6; display: flex; align-items: center; gap: 8px;
+    background: rgba(4, 12, 20, .7); border: 1px solid rgba(80, 140, 190, .45); border-radius: 999px; padding: 6px 14px;
+    font-size: 13px; color: #cfe9ff; }
+  #music-ui button { background: none; border: 0; font-size: 18px; cursor: pointer; padding: 0 2px; }
+  #music-ui input { width: 120px; accent-color: #f3d27a; }
+  #music-ui .p { min-width: 34px; text-align: right; }
+  #music-ui .t { cursor: pointer; text-decoration: underline dotted; }
+  #music-panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 9; display: none;
+    background: rgba(4, 14, 24, .92); border: 1px solid #6fb7ef; border-radius: 16px; padding: 18px 22px; min-width: 320px;
+    color: #e8f4ff; font-size: 15px; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
+  #music-panel.open { display: block; }
+  #music-panel h3 { margin: 0 0 12px; font-weight: 500; color: #f3d27a; letter-spacing: 1px; }
+  #music-panel .row { display: flex; gap: 8px; margin: 8px 0; align-items: center; }
+  #music-panel button { font-size: 14px; padding: 9px 14px; border-radius: 999px; cursor: pointer; flex: 1;
+    background: rgba(20, 50, 80, .9); color: #cfe9ff; border: 1px solid #2f5b85; }
+  #music-panel button.on { background: #6b5317; border-color: #f3d27a; color: #fff6dc; }
+  #music-panel .vol { flex: 1.4; text-align: center; }
+
+  #music-panel { max-width: min(520px, calc(100vw - 24px)); }
+  #music-panel .hint { color: #8fa8c0; font-size: 12px; margin: 6px 0 0; line-height: 1.45; }
+  #music-panel .queue-count { color: #6fb7ef; font-weight: 600; margin: 8px 0 4px; font-size: 14px; }
+  #overlay.drop-hover, #music-panel.drop-hover, body.drop-hover #overlay { outline: 2px dashed #6fb7ef; outline-offset: -8px; }
+  #mine-pick { display: none; position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%);
+    z-index: 40; gap: 10px; flex-wrap: wrap; justify-content: center; width: min(520px, calc(100vw - 24px)); }
+  #mine-pick.show { display: flex; }
+  #mine-pick button { font-size: 16px; padding: 14px 20px; border-radius: 999px;
+    background: #1d3d5c; color: #fff6dc; border: 2px solid #f3d27a; cursor: pointer; }
+  #pick-hint { display: none; position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
+    z-index: 40; background: rgba(6,16,28,.92); color: #fff6dc; border: 1px solid #f3d27a;
+    border-radius: 12px; padding: 8px 14px; font-size: 14px; max-width: min(560px, calc(100vw - 24px)); text-align: center; }
+  #pick-hint.show { display: block; }
+  input[type=file].music-input { display: none; }
+  #music-ui .add { font: 13px/1.2 inherit; color: #fff6dc; background: rgba(20, 50, 80, .9);
+    border: 1px solid #f3d27a; border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+<div id="hud">RIDGE BASE · <span class="build">build</span><br><span class="fps">-- fps</span><br><span class="loc">Ridge Base</span></div>
+<div id="fade"></div>
+<div id="overlay">
+  <h1>EUROPA · RIDGE BASE</h1>
+  <p>Test base b17-combined: same as b16-radio-local (matte/shimmer fixes, quiet lander, local radio), plus the orbiting ship stays above the snow ridges, the cabin and quarters windows have a subtle smoked tint from the outside, and wall screens on the cabin right and back walls show Europa science, the base story and the upgrade list (tap or trigger to turn the page). Two Moons Rising and Rings of Gold are still the built-in tracks. Choose files, choose a folder, or drag and drop songs onto this page or the music panel — they stay on this device and are not uploaded. In VR, use Prev/Next on the radio panel to step through every track, including ones you added. A WebXR session cannot open the file picker while you are in the headset, so add files here before Enter VR, or after you leave VR.<br>
+     Teleport: point a controller at a glowing ring or its label and pull the trigger (VR), or keys 1–9 and 0, the buttons at the bottom, or click a ring (desktop). Rings: 1 Cabin · 2 Front railing · 3 Rear railing · 4 Left edge · 5 Right edge · 6 Glass floor · 7 Living quarters · 8 Table · 9 Roof deck · 0 Lander.<br>
+     Music: click or trigger the music screen on the cabin wall or the quarters' back wall (or press B/Y in VR) to open the music panel: built-in tracks, local files, previous/next, volume − / +, mute, and rig sound on/off. Desktop also has the slider and an Add local audio button bottom-right. Rig sound: M key or the button bottom-right. N next track, P previous.<br>
+     Desktop: drag to look. Click anywhere outside the button to look around without VR. Drag and drop songs onto this page (computer only).</p>
+  <button id="enter-vr" disabled>checking VR…</button>
+  <p style="font-size:12px">Serve over http://localhost (or any https) — WebXR needs a secure context.<br>
+     Jupiter: NASA/JPL-Caltech/SwRI/MSSS JunoCam. Stars: Hipparcos catalog. Music: "Two Moons Rising (atmospheric)" and "Rings of Gold (atmospheric)" by Mars.</p>
+</div>
+<script>
+setTimeout(function () {
+  var btn = document.getElementById('enter-vr');
+  if (btn && btn.disabled && btn.textContent.indexOf('checking') === 0) {
+    btn.textContent = 'Still checking… this page must be served via http://localhost (run: npx serve) — not opened by double-clicking the file';
+  }
+}, 6000);
+</script>
+
+<input id="musicInput" class="music-input" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.opus,.flac,.webm,.weba" multiple>
+<input id="folderInput" class="music-input" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.opus,.flac,.webm,.weba" webkitdirectory directory multiple>
+<div id="mine-pick">
+  <button type="button" id="pickFilesBtn">📂 Choose music files, then Enter VR again</button>
+  <button type="button" id="pickFolderBtn">📁 Choose a music folder, then Enter VR again</button>
+</div>
+<p id="pick-hint"></p>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
