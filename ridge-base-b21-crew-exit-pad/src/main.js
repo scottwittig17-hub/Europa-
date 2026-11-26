@@ -16,6 +16,7 @@ import { createRigSound } from './rig-sound.js';
 import { buildSnowTrench } from './snowbanks.js';
 import { buildLander } from './lander.js';
 import { buildShip } from './ship.js';
+import { buildClipper } from './clipper.js';
 import { prepGlassMaterial, makeWindowGlass, aabbFromCenterSize, registerGlass, registerSolid, reportGlassFits, postCenters, paneSpans, GLASS_INSET } from './glass-fit.js';
 import { buildInfoScreens, PAGES } from './info-screens.js';
 
@@ -588,6 +589,8 @@ lander.group.position.set(LANDER.x, 0, LANDER.z); lander.group.rotation.y = LAND
 const landerAt = (fwd, side = 0) => [LANDER.x + Math.sin(LANDER.ry) * fwd + Math.cos(LANDER.ry) * side, 0, LANDER.z + Math.cos(LANDER.ry) * fwd - Math.sin(LANDER.ry) * side];
 /* ---------------------------------------------------------- b12: ship orbiting overhead */
 const ship = buildShip({ envMap: metalEnv, SUN_DIR }); skyRig.add(ship.group);
+const clipper = buildClipper({ SUN_DIR }); skyRig.add(clipper.group);   // b21: Europa Clipper, high continuous overhead loop
+
 
 /* ---------------------------------------------------------- b4: teleport spots */
 // Glowing rings with labels. VR: point a controller at a ring (or its label) and pull the trigger. Desktop: number keys,
@@ -1270,7 +1273,7 @@ renderer.setAnimationLoop(() => {
   camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
   front.position.set(_skyPos.x, _skyPos.y - EYE, _skyPos.z); ring.position.copy(front.position);   // panel centred on the eye (horizon stays at eye level, no parallax)
   if (renderer.xr.isPresenting) { pollPads(); tickMusicVR(); }
-  { const t = now * 0.001, dt = Math.min(0.1, t - (tickRig.last || t)); tickRig.last = t; tickRig(t, dt); ship.tick(dt); info.tick(dt); tickPads(now); tickFade(now);
+  { const t = now * 0.001, dt = Math.min(0.1, t - (tickRig.last || t)); tickRig.last = t; tickRig(t, dt); ship.tick(dt); clipper.tick(dt); info.tick(dt); tickPads(now); tickFade(now);
     if (!tickRig.scr || t - tickRig.scr > 1) { tickRig.scr = t; quarters.updateLive(rigZ); } }
   vrLabel.update();
   renderer.render(scene, camera);
