@@ -1,0 +1,1447 @@
+/* EUROPA — Ridge Base test b1: base on legs over a trench, sized for rig E-7 (three.js r160, WebXR). Built from Enceladus e4's engine.
+ *
+ * Single standalone spot built on the Europa surface pattern (surface-r12g):
+ *   - front: Scott's Saturn picture on a curved panel around the eye, its painted horizon at eye level
+ *   - sides / back: real-star black sky (Hipparcos stars.json + faint dust) and a soft blue horizon glow
+ *     matched to the glow in the picture, so the panel's side fades land on the same sky
+ *   - ground: real 3D smooth ice (the seamless no-crack ground from Fissure / Crevasse), coloured and lit
+ *     to match the painted plain, which the panel's bottom edge fades into
+ * Nothing here is shared with /surface/ — this folder is self-contained.
+ */
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { buildRigE7 } from './rig-e7.js';
+import { buildQuarters } from './quarters.js';
+import { createRigSound } from './rig-sound.js';
+import { buildSnowTrench } from './snowbanks.js';
+import { buildLander } from './lander.js';
+import { buildDrillTower } from './drill-tower.js';   // b22: Earth-style drill tower over the sub-drop bore, ported from b13-drill
+import { buildShip } from './ship.js';
+import { buildClipper } from './clipper.js';
+import { buildEvaRack } from './eva-suits.js';
+import { prepGlassMaterial, makeWindowGlass, aabbFromCenterSize, registerGlass, registerSolid, reportGlassFits, postCenters, paneSpans, GLASS_INSET } from './glass-fit.js';
+import { buildInfoScreens, PAGES } from './info-screens.js';
+
+/* ---------------------------------------------------------- config */
+const BUILD = 'Ridge Base b23-sharp-vr';
+const SCENE_VER = 'Ridge Base b23-sharp-vr';
+const PLAYER_HEIGHT = 1.7, EYE = PLAYER_HEIGHT;
+// Sun: the picture lights Saturn and the ice lumps from the right, a little from behind the viewer, low.
+const SUN_DIR = new THREE.Vector3(0.55, 0.42, 0.35).normalize();   // the Europa surface sun
+
+/* Front picture (assets/saturn-front.jpg, 4096x2304, from Scott's 7168x4032 4x upscale).
+ *   arcDeg   horizontal wrap. 104 deg: the rings span ~87 deg, Saturn's globe ~27 deg tall.
+ *   horizon  painted horizon row, fraction down from the top (measured 0.852 across the frame).
+ *   rows are laid out ANGLE-linear (elevation proportional to picture row, same deg/px as horizontally),
+ *   so Saturn keeps its shape high in the sky instead of being squashed the way a straight cylinder
+ *   (rows linear in height) compresses everything above ~30 deg. */
+const FRONT = { url: './assets/saturn-front.jpg?v=e1', arcDeg: 104, horizon: 0.852, radius: 300,
+  sideFade: 0.055, groundSideFade: 0.16, bottomFade: 0.035, bright: 1.0 };
+
+/* ---------------------------------------------------------- renderer / scene */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setFramebufferScaleFactor(1.2);   // b23: slightly sharper VR eye buffer (default 1.0) to cut whole-scene shimmer
+renderer.xr.addEventListener('sessionstart', () => renderer.xr.setFoveation(0));   // b23: turn off Quest fixed foveation (coarse, crawling edges in the outer view)
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 8000);   // b20: 8000 so the 2400 m ship and 3200 m stars stay inside the far plane (incl. XR)
+const rig = new THREE.Group();
+rig.add(camera); camera.position.set(0, PLAYER_HEIGHT, 0);
+scene.add(rig);
+
+/* ---------------------------------------------------------- lights */
+const sun = new THREE.DirectionalLight(0xfff6ea, 3.0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 10; sun.shadow.camera.far = 400;
+sun.shadow.camera.left = -45; sun.shadow.camera.right = 45; sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45;
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+const hemi = new THREE.HemisphereLight(0x2a3a50, 0x10161e, 0.45);       // starlight + ice bounce, cool
+scene.add(hemi);
+const saturnShine = new THREE.DirectionalLight(0xe8c8a0, 0.18);   // warm Jupiter-shine from Jupiter's side         // warm light reflected off Saturn, ahead and above
+saturnShine.position.set(-0.52, 0.30, -0.80).multiplyScalar(100);
+scene.add(saturnShine);
+
+/* ---------------------------------------------------------- stars (same round sprites as the surface builds) */
+const STAR_ROUND_SCALE = 1.25, STAR_MIN_PX = 2.2, STAR_GLOW_TAIL = 0.05, STAR_EDGE_POW = 1.0, DUST_EDGE_POW = 3.0;
+function roundStarMaterial(size, glow = false, edgePow = STAR_EDGE_POW) {
+  const px = Math.max(size * STAR_ROUND_SCALE, STAR_MIN_PX);
+  const gain = (size / px) ** 2 / 0.249;
+  return new THREE.ShaderMaterial({
+    uniforms: { uSize: { value: px }, uGain: { value: gain }, uGlow: { value: glow ? STAR_GLOW_TAIL : 0 }, uEdgePow: { value: edgePow } },
+    vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `
+      uniform float uSize, uEdgePow; varying vec3 vCol;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float c = max(-normalize(mv.xyz).z, 0.0);
+        vCol = color * pow(c, uEdgePow);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = uSize;
+      }`,
+    fragmentShader: `
+      uniform float uGain, uGlow; varying vec3 vCol;
+      void main() {
+        float r = length(gl_PointCoord - 0.5);
+        float a = exp(-12.0 * r * r) + uGlow * exp(-4.0 * r * r) * (1.0 - 2.0 * r);
+        a *= 1.0 - smoothstep(0.42, 0.5, r);
+        if (a < 0.002) discard;
+        gl_FragColor = vec4(vCol * a * uGain, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`
+  });
+}
+const skyRig = new THREE.Group();
+scene.add(skyRig);
+{
+  let starData = null;
+  try { const res = await fetch('./assets/stars.json'); if (!res.ok) throw new Error('HTTP ' + res.status); starData = await res.json(); }
+  catch (e) { console.warn('[enceladus] star catalog missing', e); }
+  const STAR_R = 3200;   // b20: beyond the 2400 m ship so the restored opaque hull sits in front of the stars
+  if (starData && starData.stars && starData.stars.length) {
+    const tiers = [{ count: 60, size: 2.0, glow: true }, { count: 360, size: 2.4 }, { count: Infinity, size: 1.5 }];
+    let offset = 0;
+    for (const t of tiers) {
+      const n = Math.min(t.count, starData.stars.length - offset); if (n <= 0) break;
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const s = starData.stars[offset + i];
+        let y = s[1]; if (y < -0.04) y = Math.abs(y);
+        pos.set([s[0] * STAR_R, y * STAR_R, s[2] * STAR_R], i * 3);
+        col.set([s[3], s[4], s[5]], i * 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const p = new THREE.Points(g, roundStarMaterial(t.size, t.glow)); p.renderOrder = 1; skyRig.add(p);
+      offset += n;
+    }
+  }
+  // faint procedural dust, so the open sky has the same fine sprinkle as the picture's painted sky
+  const N = 9000, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < N; i++) {
+    const u = rnd() * 2 - 1, th = rnd() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+    const y = Math.abs(u);                                     // upper hemisphere only
+    pos.set([r * Math.cos(th) * STAR_R, y * STAR_R, r * Math.sin(th) * STAR_R], i * 3);
+    const b = 0.05 + 0.10 * rnd() ** 3, w = rnd();
+    col.set([b * (0.9 + 0.1 * w), b * 0.95, b * (1.05 - 0.1 * w)], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const dust = new THREE.Points(g, roundStarMaterial(0.8, false, DUST_EDGE_POW)); dust.renderOrder = 1.5; skyRig.add(dust);
+}
+// distant Sun: a small hard point at SUN_DIR (Saturn is ~9.5 AU out, the Sun is a tiny brilliant disc)
+{
+  const d = new THREE.Mesh(new THREE.SphereGeometry(2.6, 12, 12), new THREE.MeshBasicMaterial({ color: 0xfff8ee, toneMapped: false }));
+  d.position.copy(SUN_DIR).multiplyScalar(1500); skyRig.add(d);
+}
+// horizon glow: the picture has a thin cold-blue glow just above its horizon (sRGB ~40,46,55 at the line, gone by ~4 deg up).
+// The same glow all the way round, so the panel's side fades blend into matching sky.
+{
+  const R = 900, top = THREE.MathUtils.degToRad(7), bot = THREE.MathUtils.degToRad(-0.6);
+  const yT = R * Math.tan(top), yB = R * Math.tan(bot);
+  const geo = new THREE.CylinderGeometry(R, R, yT - yB, 96, 1, true);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTop: { value: top }, uBot: { value: bot } },
+    side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+    vertexShader: `varying float vE; uniform float uTop, uBot;
+      void main(){ vE = mix(uBot, uTop, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying float vE;
+      void main(){ float e = degrees(max(vE, 0.0));
+        vec3 c = vec3(0.021, 0.027, 0.038) * exp(-e / 1.25);          // linear; ~sRGB (40,46,55) at the line
+        gl_FragColor = vec4(c, 1.0);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(geo, mat); m.position.y = (yT + yB) / 2; m.renderOrder = 2; m.frustumCulled = false;
+  skyRig.add(m);
+}
+
+/* ---------------------------------------------------------- ground: smooth seamless ice */
+function makeIceTextures(size = 1024) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const bv = document.createElement('canvas'); bv.width = bv.height = size;
+  const x = cv.getContext('2d'), b = bv.getContext('2d');
+  // periodic gradient (light at the tile edges) so the texture wraps without a step — the r12d smooth ground
+  const g = x.createLinearGradient(0, 0, 0, size);
+  g.addColorStop(0, '#e4ebf1'); g.addColorStop(0.5, '#d4dee7'); g.addColorStop(1, '#e4ebf1');
+  x.fillStyle = g; x.fillRect(0, 0, size, size);
+  b.fillStyle = '#808080'; b.fillRect(0, 0, size, size);
+  let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const wrapDraw = (ctx, fn) => { for (const ox of [-size, 0, size]) for (const oy of [-size, 0, size]) fn(ctx, ox, oy); };
+  for (let i = 0; i < 260; i++) {                         // soft blotches (drawn wrapped -> seamless)
+    const r = 20 + rnd() * 90, cx = rnd() * size, cy = rnd() * size, e = 0.4 + rnd() * 0.6, rot = rnd() * 3;
+    const dk = rnd() < 0.4, fill = dk ? `rgba(${150 + rnd() * 30 | 0},${160 + rnd() * 30 | 0},${172 + rnd() * 30 | 0},0.07)` : `rgba(${225 + rnd() * 30 | 0},${230 + rnd() * 25 | 0},${238 + rnd() * 17 | 0},0.10)`;
+    wrapDraw(x, (c, ox, oy) => { c.fillStyle = fill; c.beginPath(); c.ellipse(cx + ox, cy + oy, r, r * e, rot, 0, 7); c.fill(); });
+  }
+  for (let i = 0; i < 700; i++) {                         // gentle bump lumps (frost texture, no cracks)
+    const r = 4 + rnd() * 26, cx = rnd() * size, cy = rnd() * size, v = rnd() < 0.5 ? 255 : 0;
+    wrapDraw(b, (c, ox, oy) => { const gr = c.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, r);
+      gr.addColorStop(0, `rgba(${v},${v},${v},0.10)`); gr.addColorStop(1, `rgba(${v},${v},${v},0)`); c.fillStyle = gr; c.fillRect(cx + ox - r, cy + oy - r, 2 * r, 2 * r); });
+  }
+  for (let i = 0; i < 2600; i++) { x.fillStyle = `rgba(255,255,255,${rnd() * 0.10})`; x.fillRect(rnd() * size, rnd() * size, 1.6, 1.6); }
+  const map = new THREE.CanvasTexture(cv); map.wrapS = map.wrapT = THREE.RepeatWrapping; map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const bump = new THREE.CanvasTexture(bv); bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+  return { map, bump };
+}
+const ice = makeIceTextures(1024);
+// e2: Scott - fill the bare ground left/right/behind by repeating ONE exact patch of the picture's own ice: a flat-snow patch
+// from the bottom of his Saturn picture (7168x4032 4x, x 4300-5000, 75 rows above the bottom edge, stretched back to square),
+// made seamless (half-offset crossfade, left-right then top-bottom) and set to the old ground's brightness. The same tile
+// repeats everywhere; the frost bump map stays for close-up shading.
+// (b1: Enceladus picture tile not used; procedural ice)
+const GROUND_SIZE = 4000, TILE_M = 15.6;
+ice.map.repeat.setScalar(GROUND_SIZE / TILE_M); ice.bump.repeat.setScalar(GROUND_SIZE / TILE_M);
+// colour tuned so the 3D ice at the panel's bottom edge matches the painted plain (sRGB ~145,149,154, slightly cool)
+const groundMat = new THREE.MeshStandardMaterial({ map: ice.map, bumpMap: ice.bump, bumpScale: 0.5,
+  roughness: 0.75, metalness: 0.0, color: new THREE.Color(0xf4f7fb) });
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE), groundMat); ground.visible = false;   // b1: replaced by the trench ground below
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+scene.add(ground);
+// low snow mounds like the lumps in the painted plain (stay well under the horizon; the front ones past ~11 m sit under the picture)
+{
+  const mounds = new THREE.Group(); scene.add(mounds);
+  let seed = 23; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const geo = new THREE.SphereGeometry(1, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2);
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) {                    // lumpy, not perfect domes
+    const vx = p.getX(i), vy = p.getY(i), vz = p.getZ(i);
+    const n = 1 + 0.18 * Math.sin(vx * 5.1 + vz * 3.7) * Math.cos(vz * 4.3 - vx * 2.2) + 0.08 * Math.sin(vx * 11 + vz * 9);
+    p.setXYZ(i, vx * n, vy * n, vz * n);
+  }
+  geo.computeVertexNormals();
+  // clustered like the picture's lumpy ridges: ~45 clusters of 1-5 lumps
+  const spots = [];
+  for (let c = 0; c < 45; c++) {
+    const a = rnd() * Math.PI * 2, r = 8 + 170 * rnd() ** 1.5, k = 1 + (rnd() * 5 | 0);
+    for (let j = 0; j < k; j++) spots.push([Math.cos(a) * r + (rnd() - 0.5) * r * 0.12, Math.sin(a) * r + (rnd() - 0.5) * r * 0.12, r]);
+  }
+  for (const [sx, sz, r] of spots) {
+    const a = Math.atan2(sz, sx);
+    const w = (0.3 + rnd() * 1.1) * (1 + r / 70), h = w * (0.18 + rnd() * 0.22);
+    if (r < 45 || Math.abs(sx) < 30) continue;   // b1: keep the trench and its rims clear   // e4: no near mounds - up close they read as dark slabs with smeared shadows (Scott's plateau photo)
+    const m = new THREE.Mesh(geo, groundMat);
+    m.scale.set(w, h, w * (0.5 + rnd() * 0.6)); m.rotation.y = rnd() * Math.PI;
+    m.position.set(sx, -0.02, sz);
+    m.castShadow = m.receiveShadow = true; mounds.add(m);
+  }
+}
+
+/* ---------------------------------------------------------- front picture panel */
+function addPanel(o) {
+  const R = o.radius, arc = THREE.MathUtils.degToRad(o.arcDeg), vert = arc * 9 / 16;   // same deg per pixel both ways
+  const SEG_H = 64;
+  const geo = new THREE.CylinderGeometry(R, R, 1, 96, SEG_H, true, Math.PI - arc / 2, arc);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const e = (uv.getY(i) - (1 - o.horizon)) * vert;        // elevation of this picture row (0 = painted horizon)
+    pos.setY(i, EYE + R * Math.tan(e));
+  }
+  pos.needsUpdate = true; geo.computeBoundingSphere();
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uMap: { value: null }, uBright: { value: o.bright }, uSide: { value: o.sideFade }, uSideG: { value: o.groundSideFade }, uHor: { value: 1 - o.horizon }, uBot: { value: o.bottomFade } },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = vec2(1.0 - uv.x, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform sampler2D uMap; uniform float uBright, uSide, uSideG, uHor, uBot;
+      void main(){
+        vec4 t = texture2D(uMap, vUv);
+        float w = mix(uSideG, uSide, smoothstep(uHor - 0.004, uHor + 0.02, vUv.y));   // wide fade over the painted plain, narrow in the sky
+        float a = smoothstep(0.0, w, vUv.x) * smoothstep(1.0, 1.0 - w, vUv.x) * smoothstep(0.0, uBot, vUv.y);
+        gl_FragColor = vec4(t.rgb * uBright, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.y = -THREE.MathUtils.degToRad(o.yawDeg || 0);
+  mesh.renderOrder = 12; mesh.frustumCulled = false; mesh.visible = false;
+  scene.add(mesh);                                       // world-fixed (snap turning lets you turn away); re-centred on the eye every frame
+  return mesh;
+}
+const front = addPanel(FRONT);
+{
+  const t = await new THREE.TextureLoader().loadAsync(FRONT.url).catch(e => { console.warn('[enceladus] front picture missing', e); return null; });
+  if (t) {
+    t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    renderer.initTexture(t);
+    front.material.uniforms.uMap.value = t; front.visible = true;
+  }
+}
+
+/* ---------------------------------------------------------- e3: painted ice all the way around */
+// Scott: the sides and back looked bare next to the painted front. The picture's own ground band (rows 1940-2304 of
+// saturn-front.jpg; plume glow at the horizon patched out; left/right edges crossfaded so it wraps with no seam) is laid on a
+// full 360-degree ring at the same degrees-per-pixel and horizon as the front picture, repeated 4 times (90 deg each).
+// It sits under the front panel (front draws on top, its side fades now blend into this ice instead of bare ground);
+// only the ground shows, everything above the horizon is transparent so the stars stay exactly as they were.
+const RING = { url: './assets/enceladus-ring.jpg', rows: 364, picRows: 2304, copies: 4 };
+const ring = (() => {
+  const R = FRONT.radius - 2, vert = THREE.MathUtils.degToRad(FRONT.arcDeg) * 9 / 16, hor = 1 - FRONT.horizon, frac = RING.rows / RING.picRows;
+  const geo = new THREE.CylinderGeometry(R, R, 1, 256, 32, true);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) pos.setY(i, EYE + R * Math.tan((uv.getY(i) * frac - hor) * vert));
+  pos.needsUpdate = true; geo.computeBoundingSphere();
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uMap: { value: null }, uFrac: { value: frac }, uHor: { value: hor }, uBot: { value: FRONT.bottomFade }, uN: { value: RING.copies }, uRingFade: { value: 0.11 } },
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform sampler2D uMap; uniform float uFrac, uHor, uBot, uN, uRingFade;
+      void main(){
+        vec4 t = texture2D(uMap, vec2((1.0 - vUv.x) * uN, vUv.y))   /* e4: no fract() - it made a shimmering 1-px line at each of the 4 joins */;
+        float v = vUv.y * uFrac;                                  // row in front-picture terms (0 = bottom)
+        float a = pow(smoothstep(0.0, uRingFade, v), 1.6) *   /* e4: long soft fade into the near snow instead of a hard ledge */ (1.0 - smoothstep(uHor - 0.001, uHor + 0.004, v));
+        gl_FragColor = vec4(t.rgb, a);
+        #include <colorspace_fragment>
+      }`
+  });
+  const m = new THREE.Mesh(geo, mat); m.renderOrder = 11; m.frustumCulled = false; m.visible = false; scene.add(m);
+  return m;
+})();
+{
+  const t = await new THREE.TextureLoader().loadAsync(RING.url).catch(e => { console.warn('[enceladus] ring picture missing', e); return null; });
+  if (t) {
+    t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    renderer.initTexture(t); ring.material.uniforms.uMap.value = t; ring.visible = true;
+  }
+}
+
+/* ---------------------------------------------------------- b2: metal look */
+// Reflection map for the metal only (not the ice plain): black starry sky above, the bright ice horizon band, ice below,
+// a warm patch toward the Sun. Without something to reflect, metal just renders dark.
+const metalEnv = (() => {
+  const W = 1024, H = 512, c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, H);
+  gr.addColorStop(0, '#020306'); gr.addColorStop(0.44, '#0a0d14'); gr.addColorStop(0.49, '#9aa4b2'); gr.addColorStop(0.5, '#e8ecf0');
+  gr.addColorStop(0.62, '#b8bec6'); gr.addColorStop(1, '#7a8088');
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 500; i++) { g.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.7})`; g.fillRect(Math.random() * W, Math.random() * H * 0.45, 1, 1); }
+  const sd = SUN_DIR.clone().normalize();
+  const sx = W * (0.5 + Math.atan2(sd.x, -sd.z) / (2 * Math.PI)), sy = H * (0.5 - Math.asin(sd.y) / Math.PI);
+  const rg = g.createRadialGradient(sx, sy, 0, sx, sy, 60); rg.addColorStop(0, 'rgba(255,240,210,1)'); rg.addColorStop(1, 'rgba(255,220,170,0)');
+  g.fillStyle = rg; g.fillRect(sx - 60, sy - 60, 120, 120);
+  const t = new THREE.CanvasTexture(c); t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace;
+  const pm = new THREE.PMREMGenerator(renderer); const rt = pm.fromEquirectangular(t); pm.dispose(); t.dispose(); return rt.texture;
+})();
+// brushed-metal grain: fine streaks in one direction, used as a roughness map
+const brushed = (() => {
+  const N = 512, c = document.createElement('canvas'); c.width = c.height = N; const g = c.getContext('2d');
+  g.fillStyle = '#808080'; g.fillRect(0, 0, N, N);
+  for (let i = 0; i < 2600; i++) { const v = 90 + Math.random() * 90 | 0; g.fillStyle = `rgba(${v},${v},${v},0.5)`; g.fillRect(Math.random() * N, Math.random() * N, 40 + Math.random() * 220, 1); }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(10, 10); return t;
+})();
+const trenchMat = groundMat.clone();              // polished ice sheen on the trench floor and walls only
+trenchMat.roughness = 0.38; trenchMat.metalness = 0.12; trenchMat.envMap = metalEnv; trenchMat.envMapIntensity = 0.55;
+
+/* ---------------------------------------------------------- b1: Ridge base on legs over the trench (no rig yet) */
+/* Sizes (metres). Scott's Europa Ice Mining Rig E-7 picture, scaled from its lit windows (~1.5 m) and deck railings (~1.1 m):
+ *   rig ~22 wide over its treads, ~40 long, ~22 tall to the cabin roof (masts extra).
+ * Ridge platform numbers are the floor: >= 1.6 m up, >= 18 m across the top, >= 24 m at the bottom, eye 1.7 m above the floor.
+ *   trench:  36 wide, 10 deep, straight, running away from you (-z) and behind you (+z)
+ *   legs:    4 columns standing on the rims, 43 m apart across the trench, 20 m apart along it, 15 m tall above the rims
+ *   deck:    46 x 24, top 25 m above the trench floor; underside clearance 23.8 m (rig 22 m + 1.8 m) over the full 36 m width
+ *   cabin:   20 x 14 x 4 m on the deck, glass all round; a 8 x 5 m glass floor panel in front of you to look straight down
+ */
+const TRENCH_W = 36, TRENCH_D = 10, DECK_TOP = 15, DECK_T = 1.2, DECK_W = 46, DECK_L = 24;
+const LEG_X = 21.5, LEG_Z = 10, LEG_S = 1.6, CAB_W = 20, CAB_L = 14, CAB_H = 4, HOLE_W = 8, HOLE_L = 5;
+const BASE_SPAWN = new THREE.Vector3(0, DECK_TOP, 4.5);
+// ground with the trench cut into it (world-scaled UVs so the ice texture matches everywhere)
+function worldUV(geo, mesh) {
+  mesh.updateMatrixWorld(true); const pos = geo.attributes.position, uv = geo.attributes.uv, v = new THREE.Vector3(), n = new THREE.Vector3();
+  geo.computeVertexNormals(); const nn = geo.attributes.normal;
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld); n.fromBufferAttribute(nn, i).transformDirection(mesh.matrixWorld);
+    const a = Math.abs(n.x) > 0.5 ? [v.z, v.y] : [v.x, v.z];
+    uv.setXY(i, a[0] / GROUND_SIZE + 0.5, a[1] / GROUND_SIZE + 0.5);
+  }
+  uv.needsUpdate = true;
+}
+function iceSlab(w, h, x, y, z, rx = -Math.PI / 2, ry = 0, mat = groundMat) {
+  const g = new THREE.PlaneGeometry(w, h, 1, 1), m = new THREE.Mesh(g, mat);
+  m.position.set(x, y, z); m.rotation.set(rx, ry, 0, 'YXZ'); m.receiveShadow = true; m.castShadow = false;
+  scene.add(m); worldUV(g, m); return m;
+}
+{
+  const half = GROUND_SIZE / 2, side = half - TRENCH_W / 2;
+  // b10: the flat rim plains are replaced by the snowy heightfields in snowbanks.js (built just below)
+  iceSlab(TRENCH_W, GROUND_SIZE, 0, -TRENCH_D, 0, -Math.PI / 2, 0, trenchMat);                          // trench floor
+  iceSlab(GROUND_SIZE, TRENCH_D, -TRENCH_W / 2, -TRENCH_D / 2, 0, 0, Math.PI / 2, trenchMat);   // left wall, faces into the trench
+  iceSlab(GROUND_SIZE, TRENCH_D, TRENCH_W / 2, -TRENCH_D / 2, 0, 0, -Math.PI / 2, trenchMat);   // right wall
+}
+// b10: chunky snowy trench walls, lip berms, ice blocks, rubble, rolling drifts to the horizon
+const snow = buildSnowTrench({ scene, groundMat, trenchMat, TRENCH_W, TRENCH_D, GROUND_SIZE,
+  legs: [[-LEG_X, -LEG_Z], [-LEG_X, LEG_Z], [LEG_X, -LEG_Z], [LEG_X, LEG_Z]],
+  detailZ: 600,                         // b12: detailed walls/rims out to +-600 m, past the rig's +-560 m run
+  flats: [[-48, -52, 18, 25], [50, -54, 16, 24]] });       // b12: flat landing site for the lander; b13-drill/b22: flat pad for the drill tower (right rim)
+// Jupiter (same texture, place and size as the Europa surface: ~12 deg across, 33 deg left of forward)
+{
+  const t = await new THREE.TextureLoader().loadAsync('./assets/jupiter-hi.jpg').catch(() => null);
+  if (t) {
+    t.colorSpace = THREE.SRGBColorSpace;
+    const D = 900, Rj = D * Math.tan(THREE.MathUtils.degToRad(6));
+    const j = new THREE.Mesh(new THREE.SphereGeometry(Rj, 64, 48), new THREE.MeshBasicMaterial({ map: t }));
+    j.position.set(-0.52, 0.30, -0.80).normalize().multiplyScalar(D); skyRig.add(j);
+  }
+}
+// the base
+const base = new THREE.Group(); scene.add(base);
+{
+  const metal = new THREE.MeshPhysicalMaterial({ color: 0x949ba4, metalness: 1, roughness: 0.5, roughnessMap: brushed, anisotropy: 0.2, envMap: metalEnv, envMapIntensity: 0.6 });   // brushed steel (b14: color -12%, roughness 0.4->0.5, env 1.25->0.6)
+  const dark = new THREE.MeshPhysicalMaterial({ color: 0x4f5761, metalness: 1, roughness: 0.5, roughnessMap: brushed, anisotropy: 0.2, envMap: metalEnv, envMapIntensity: 0.6 });   // gunmetal (b14: color -12%, roughness 0.4->0.5, env 1.1->0.6)
+  // Matte non-metal deck / roof-terrace / stair floor: no brush map, no anisotropy (kills the radial streak glare).
+  const floorM = new THREE.MeshStandardMaterial({ color: 0x808790, metalness: 0.3, roughness: 0.7, envMap: metalEnv, envMapIntensity: 0.3 });
+  const railM = new THREE.MeshPhysicalMaterial({ color: 0x4f5761, metalness: 1, roughness: 0.5, anisotropy: 0, envMap: metalEnv, envMapIntensity: 0.6 });   // thin rails/posts
+  const barM = new THREE.MeshStandardMaterial({ color: 0x4f5761, metalness: 0.45, roughness: 0.48, envMap: metalEnv, envMapIntensity: 0.35 });   // glass-floor centre bar, matte
+  const glass = prepGlassMaterial(new THREE.MeshStandardMaterial({ color: 0x9fc6e0, roughness: 0.02, metalness: 0.1, transparent: true, opacity: 0.14, depthWrite: false, envMap: metalEnv, envMapIntensity: 1.4 }));   // glass floor: stays clear
+  const winGlass = makeWindowGlass(metalEnv, new THREE.Vector3(0, 17, 0));   // cabin walls: smoked outside, clear-ish inside
+  const amber = new THREE.MeshStandardMaterial({ color: 0x221a10, emissive: 0xffb860, emissiveIntensity: 1.4 });
+  const box = (w, h, d, x, y, z, m = metal, cast = true) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.castShadow = cast; b.receiveShadow = true; base.add(b); return b; };
+  const dy = DECK_TOP - DECK_T / 2;
+  // deck slab with the glass-floor hole in the middle (4 pieces)
+  box(DECK_W, DECK_T, (DECK_L - HOLE_L) / 2, 0, dy, -(HOLE_L / 2 + (DECK_L - HOLE_L) / 4), floorM);
+  box(DECK_W, DECK_T, (DECK_L - HOLE_L) / 2, 0, dy, (HOLE_L / 2 + (DECK_L - HOLE_L) / 4), floorM);
+  box((DECK_W - HOLE_W) / 2, DECK_T, HOLE_L, -(HOLE_W / 2 + (DECK_W - HOLE_W) / 4), dy, 0, floorM);
+  box((DECK_W - HOLE_W) / 2, DECK_T, HOLE_L, (HOLE_W / 2 + (DECK_W - HOLE_W) / 4), dy, 0, floorM);
+  // b14: glass-floor frame sits ON the deck (bottom = DECK_TOP), not sunk into it, and is shifted
+  // so the hole wall no longer runs through the middle of the beam. Glass is inset inside the
+  // opening. The centre bar is wider, matte, shortened to stop at the frame, and sits on the glass.
+  const FW = 0.15, FH = 0.08;                          // frame width / height
+  const frameY = DECK_TOP + FH / 2;                    // bottom flush with the deck top (not sunk in)
+  // Beams sit mostly on the deck with a small lip over the hole, so the hole wall no longer
+  // runs through the middle of the beam. Side beams stop at the front/back beams' inner faces.
+  const fzF = -HOLE_L / 2 - FW / 2 + 0.04, fzB = HOLE_L / 2 + FW / 2 - 0.04;   // ±2.535
+  const fxL = -HOLE_W / 2 - FW / 2 + 0.04, fxR = HOLE_W / 2 + FW / 2 - 0.04;
+  const innerZ = Math.abs(fzF) - FW / 2;               // 2.460 — inner face of the N/S beams
+  const innerX = Math.abs(fxL) - FW / 2;
+  const sideLen = innerZ * 2;                          // side beams butt the N/S inner faces
+  box(HOLE_W + 0.3, FH, FW, 0, frameY, fzF, dark);
+  box(HOLE_W + 0.3, FH, FW, 0, frameY, fzB, dark);
+  box(FW, FH, sideLen, fxL, frameY, 0, dark);
+  box(FW, FH, sideLen, fxR, frameY, 0, dark);
+  registerSolid(aabbFromCenterSize(0, frameY, fzF, HOLE_W + 0.3, FH, FW, 'gf-frame-N'));
+  registerSolid(aabbFromCenterSize(0, frameY, fzB, HOLE_W + 0.3, FH, FW, 'gf-frame-S'));
+  registerSolid(aabbFromCenterSize(fxL, frameY, 0, FW, FH, sideLen, 'gf-frame-W'));
+  registerSolid(aabbFromCenterSize(fxR, frameY, 0, FW, FH, sideLen, 'gf-frame-E'));
+  const gW = innerX * 2 - 2 * GLASS_INSET, gL = innerZ * 2 - 2 * GLASS_INSET;
+  box(gW, 0.06, gL, 0, DECK_TOP - 0.03, 0, glass, false);
+  registerGlass(aabbFromCenterSize(0, DECK_TOP - 0.03, 0, gW, 0.06, gL, 'gf-glass'));
+  // centre glazing bar: 0.15 m wide, roughness 0.48, shortened 0.15 m so it stops at the frame, sits on the glass
+  const barLen = HOLE_L - 0.15, barW = 0.15, barH = 0.08;
+  box(barW, barH, barLen, 0, DECK_TOP + barH / 2, 0, barM, false);
+  registerSolid(aabbFromCenterSize(0, DECK_TOP + barH / 2, 0, barW, barH, barLen, 'gf-centre-bar'));
+  // under-deck girders across the trench (the rig passes under these)
+  for (const z of [-LEG_Z, -LEG_Z / 2 + 0.5, LEG_Z / 2 - 0.5, LEG_Z]) if (Math.abs(z) > HOLE_L / 2) box(DECK_W, 0.6, 0.5, 0, DECK_TOP - DECK_T - 0.3, z, dark);
+  // legs: 4 columns on the rims, with cross-bracing along the trench direction
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      box(LEG_S, DECK_TOP - DECK_T, LEG_S, sx * LEG_X, (DECK_TOP - DECK_T) / 2, sz * LEG_Z);
+      box(LEG_S * 2.2, 0.5, LEG_S * 2.2, sx * LEG_X, 0.25, sz * LEG_Z, dark);   // foot pad
+    }
+    const L = Math.hypot(2 * LEG_Z, DECK_TOP - DECK_T - 1);
+    for (const k of [-1, 1]) {
+      const b = box(0.35, L, 0.35, sx * LEG_X, (DECK_TOP - DECK_T) / 2, 0, dark);
+      b.rotation.x = k * Math.atan2(2 * LEG_Z, DECK_TOP - DECK_T - 1);
+    }
+  }
+  // railing round the deck edge
+  // b13-railing: the flashing at the joins was z-fighting - posts and rails were the SAME 0.06 m thick on the same centre
+  // line (coplanar side faces), and the side rails overlapped the end rails at the corners (coplanar top/bottom faces).
+  // Now posts are 0.085 m (rails sit inside them, no shared faces) and the side rails stop at the end rails' inner face.
+  const RP = 0.085, RT = 0.06;
+  const rail = (w, d, x, z) => { box(w, 0.06, d, x, DECK_TOP + 1.1, z, railM, false); box(w, 0.04, d, x, DECK_TOP + 0.55, z, railM, false); };
+  rail(DECK_W, RT, 0, -DECK_L / 2); rail(DECK_W, RT, 0, DECK_L / 2); rail(RT, DECK_L - RT, -DECK_W / 2, 0); rail(RT, DECK_L - RT, DECK_W / 2, 0);
+  for (let x = -DECK_W / 2; x <= DECK_W / 2 + 0.01; x += 2.3) { box(RP, 1.1, RP, x, DECK_TOP + 0.55, -DECK_L / 2, railM, false); box(RP, 1.1, RP, x, DECK_TOP + 0.55, DECK_L / 2, railM, false); }
+  for (let z = -DECK_L / 2 + 2.4; z < DECK_L / 2; z += 2.4) { box(RP, 1.1, RP, -DECK_W / 2, DECK_TOP + 0.55, z, railM, false); box(RP, 1.1, RP, DECK_W / 2, DECK_TOP + 0.55, z, railM, false); }
+  // cabin: glass walls, posts every 2.5 m, sill and header bands, roof
+  const cy = DECK_TOP + CAB_H / 2;
+  box(CAB_W, 0.25, CAB_L, 0, DECK_TOP + CAB_H + 0.125, 0, floorM);               // roof / walkable terrace (matte floor, not brushed metal)
+  // b14: posts are thicker than sills/headers (distinct depths, same idea as the railing fix).
+  // Glass is split into panes between the posts and inset just inside the wall so nothing
+  // crosses or sits coplanar with a post, sill or header.
+  const POST = 0.20, POST_H = POST / 2, FRAME_D = 0.12;      // posts 0.20, sill/header 0.12 deep
+  const SILL_TOP = DECK_TOP + 0.6, HEADER_BOT = DECK_TOP + CAB_H - 0.4;
+  const xs = postCenters(-CAB_W / 2, CAB_W / 2, 2.5);
+  const zs = postCenters(-CAB_L / 2, CAB_L / 2, 2.33);
+  function wallFrame(along, w, d, x, z, y, h, name) {
+    const m = box(w, h, d, x, y, z, dark);
+    registerSolid(aabbFromCenterSize(x, y, z, w, h, d, name));
+    return m;
+  }
+  // sills + headers (shallower than the posts, sit inside the post depth)
+  for (const [along, w, d, x, z, tag] of [
+    ['x', CAB_W, FRAME_D, 0, -CAB_L / 2, 'front'],
+    ['x', CAB_W, FRAME_D, 0,  CAB_L / 2, 'back'],
+    ['z', FRAME_D, CAB_L, -CAB_W / 2, 0, 'left'],
+    ['z', FRAME_D, CAB_L,  CAB_W / 2, 0, 'right'],
+  ]) {
+    wallFrame(along, w, d, x, z, DECK_TOP + 0.3, 0.6, `cabin-sill-${tag}`);
+    wallFrame(along, w, d, x, z, DECK_TOP + CAB_H - 0.2, 0.4, `cabin-header-${tag}`);
+  }
+  // posts: 0.20 m square, full storey height
+  for (const x of xs) for (const z of [-CAB_L / 2, CAB_L / 2]) {
+    box(POST, CAB_H, POST, x, cy, z, dark);
+    registerSolid(aabbFromCenterSize(x, cy, z, POST, CAB_H, POST, `cabin-post-${x.toFixed(2)},${z}`));
+  }
+  for (const z of zs) {
+    if (Math.abs(Math.abs(z) - CAB_L / 2) < 0.05) continue;   // corners already placed
+    for (const x of [-CAB_W / 2, CAB_W / 2]) {
+      box(POST, CAB_H, POST, x, cy, z, dark);
+      registerSolid(aabbFromCenterSize(x, cy, z, POST, CAB_H, POST, `cabin-post-${x},${z.toFixed(2)}`));
+    }
+  }
+  // glass panes: between posts, between sill and header, shifted just inside the posts
+  const paneH = (HEADER_BOT - GLASS_INSET) - (SILL_TOP + GLASS_INSET);
+  const paneY = ((SILL_TOP + GLASS_INSET) + (HEADER_BOT - GLASS_INSET)) / 2;
+  const gThick = 0.05;
+  function addWallPanes(centers, along, wallPos, inward, tag) {
+    const inner = wallPos + inward * (POST_H + GLASS_INSET + gThick / 2);
+    for (const s of paneSpans(centers, POST_H)) {
+      if (along === 'x') {
+        box(s.len, paneH, gThick, s.mid, paneY, inner, winGlass, false);
+        registerGlass(aabbFromCenterSize(s.mid, paneY, inner, s.len, paneH, gThick, `cabin-glass-${tag}-${s.mid.toFixed(2)}`));
+      } else {
+        box(gThick, paneH, s.len, inner, paneY, s.mid, winGlass, false);
+        registerGlass(aabbFromCenterSize(inner, paneY, s.mid, gThick, paneH, s.len, `cabin-glass-${tag}-${s.mid.toFixed(2)}`));
+      }
+    }
+  }
+  addWallPanes(xs, 'x', -CAB_L / 2, +1, 'front');
+  addWallPanes(xs, 'x',  CAB_L / 2, -1, 'back');
+  addWallPanes(zs, 'z', -CAB_W / 2, +1, 'left');
+  addWallPanes(zs, 'z',  CAB_W / 2, -1, 'right');
+  // a door on the back wall out to the open deck (just a frame for now) and warm ceiling light strips
+  for (const x of [-4, 0, 4]) box(1.6, 0.05, 0.25, x, DECK_TOP + CAB_H - 0.03, 0, amber, false);
+  const lamp = new THREE.PointLight(0xffc98a, 22, 14, 1.8); lamp.position.set(0, DECK_TOP + CAB_H - 0.5, 0); base.add(lamp);   // b14: was 45/30/1.4 — tighter falloff, no hot cone on the outer deck
+  // small amber deck lights at the leg tops so the base reads at night
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(0.5, 0.3, 0.5, sx * LEG_X, DECK_TOP + 0.15, sz * LEG_Z, amber, false);
+}
+if (false) { // b10: the b2 polished steel lip strips are gone - the lips are snow now
+  const lip = new THREE.MeshPhysicalMaterial({ color: 0xb4bcc6, metalness: 1, roughness: 0.22, roughnessMap: brushed, anisotropy: 0.8, envMap: metalEnv, envMapIntensity: 1.3 });
+  for (const sx of [-1, 1]) { const m = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.25, 1200), lip); m.position.set(sx * (TRENCH_W / 2 + 0.5), 0.12, 0); m.receiveShadow = true; scene.add(m); }
+}
+rig.position.copy(BASE_SPAWN);
+
+/* ---------------------------------------------------------- b3: mining rig E-7 crawling along the trench */
+// Drives along the trench axis (x = 0) on the floor (y = -10), heading +z: it comes out of the distance ahead of you,
+// passes under the deck (seen through the glass floor), and carries on behind; it fades out at the far end and back in ahead.
+// Clearance: highest mast tip 20.6 m -> y 10.6; lowest under-deck girder 13.2 -> 2.6 m to spare. Widest point 17.2 m (mid deck),
+// so it stays 9 m+ inside the 36 m trench walls; the base legs stand on the rims at x +-21.5, outside the trench.
+// b11: Scott saw the rig vanish too soon behind the base and pop back in too close ahead. Both ends are now far out on the
+// 4 km floor (ground edge at +-2000): it fades in at -560 and out at +560, each over the last 90 m where it is a speck
+// (~1 deg tall), and re-enters at the far front every time. The load start stays at -110 (under the glass ~2.3 min after load).
+// Speed is the same 0.8 m/s near the base; beyond ~250 m out (where it is under 4 deg tall) it eases up to 2.4 m/s so a full
+// pass takes ~15 min instead of ~23.
+const RIG = { z0: -560, z1: 560, start: -110, speed: 0.8, fade: 90, farFrom: 250, farTo: 360, farMul: 3 };
+const e7 = buildRigE7({ envMap: metalEnv, envI: 0.75 });
+e7.group.rotation.y = -Math.PI / 2;                   // local +x (boom) -> world +z, the travel direction
+e7.group.position.set(0, -TRENCH_D, RIG.start);
+scene.add(e7.group);
+let rigZ = RIG.start, rigPaused = false;
+const rigDecal = e7.group.children.find(m => m.isMesh && m.renderOrder === 2), _rcam = new THREE.Vector3();
+// b6: the grinding sound rides on the rig (between the hull and the cutter wheel), starts on the first click / key / Enter VR
+const soundAnchor = new THREE.Object3D(); soundAnchor.position.set(8, 4, 0); e7.group.add(soundAnchor);
+const rigSound = createRigSound({ camera, anchor: soundAnchor, onState: () => updateSoundBtn() });
+function updateSoundBtn() { const b = document.getElementById('rig-sound-btn'); if (b) b.textContent = rigSound.muted ? '\u{1F507} Rig sound off (M)' : '\u{1F50A} Rig sound on (M)'; try { drawPanel(); syncDeskPanel(); } catch (e) { /* music UI not built yet */ } }
+for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, () => rigSound.start(), { capture: true });
+renderer.xr.addEventListener('sessionstart', () => rigSound.start());
+window.addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M') rigSound.toggleMute(); });
+{ const b = document.createElement('button'); b.id = 'rig-sound-btn';
+  b.style.cssText = 'position:fixed;right:12px;bottom:116px;z-index:6;font-size:13px;padding:8px 14px;border-radius:999px;cursor:pointer;background:rgba(10,28,46,.8);color:#cfe9ff;border:1px solid #2f5b85';
+  b.onclick = ev => { ev.stopPropagation(); rigSound.start(); rigSound.toggleMute(); }; document.body.appendChild(b); updateSoundBtn(); }
+function tickRig(t, dt) {
+  let moved = 0;
+  if (!rigPaused) {
+    const k = THREE.MathUtils.smoothstep(Math.abs(rigZ), RIG.farFrom, RIG.farTo);
+    moved = RIG.speed * (1 + (RIG.farMul - 1) * k) * dt; rigZ += moved;
+    if (rigZ > RIG.z1) rigZ = RIG.z0;               // faded out at the far rear -> straight to the far front, still hidden
+  }
+  // the soft contact-shadow decal only near the camera (no depth fight with the floor when the rig is far away)
+  if (rigDecal) { camera.getWorldPosition(_rcam); rigDecal.visible = Math.abs(rigZ - _rcam.z) < 160; }
+  e7.group.position.z = rigZ;
+  const f = Math.min(1, (rigZ - RIG.z0) / RIG.fade, (RIG.z1 - rigZ) / RIG.fade);
+  e7.setOpacity(Math.max(0, f));
+  rigSound.update(Math.max(0, f));   // b6: distance-shaped grind, faded with the rig
+  e7.tick(t, dt, 0.18, moved);       // b5: tracks + wheels roll by the distance crawled
+}
+
+/* ---------------------------------------------------------- b4: upper storey living quarters on the cabin roof */
+const ROOF_TOP = DECK_TOP + CAB_H + 0.25;          // 19.25 m: the cabin roof is the quarters' floor
+const quarters = buildQuarters({ U: ROOF_TOP, envMap: metalEnv, brushed, deckTop: DECK_TOP });
+base.add(quarters.group);
+reportGlassFits('b14-combined');
+
+/* ---------------------------------------------------------- b12: gold science lander on the Jupiter-side rim */
+// From the front railing (looking down the trench, -z) Jupiter is 33 deg to the LEFT (x < 0), so the Jupiter-facing rim is the
+// left one. It sits ~52 m out from the deck's front-left corner on the left plain, ramp turned toward the base, Jupiter behind it.
+const LANDER = { x: -50, z: -54 }; LANDER.ry = Math.atan2(0 - LANDER.x, -11 - LANDER.z);   // ramp faces the front railing
+const lander = buildLander({ envMap: metalEnv });
+lander.group.position.set(LANDER.x, 0, LANDER.z); lander.group.rotation.y = LANDER.ry; scene.add(lander.group);
+const landerAt = (fwd, side = 0) => [LANDER.x + Math.sin(LANDER.ry) * fwd + Math.cos(LANDER.ry) * side, 0, LANDER.z + Math.cos(LANDER.ry) * fwd - Math.sin(LANDER.ry) * side];
+/* ---------------------------------------------------------- b22: drill tower over the submarine-drop bore (right rim, opposite the lander) */
+// Same placement as standalone b13-drill: (50, -54) on a flattened snow pad, facing the front of the base. ~100 m from the
+// lander at (-50, -54); well clear of the 46×24 m deck, all teleport pads, and the lander ramp/spot.
+const DRILL = { x: 50, z: -54 }; DRILL.ry = Math.atan2(0 - DRILL.x, -11 - DRILL.z);
+const drill = buildDrillTower({ envMap: metalEnv });
+drill.group.position.set(DRILL.x, 0, DRILL.z); drill.group.rotation.y = DRILL.ry; scene.add(drill.group);
+/* ---------------------------------------------------------- b12: ship orbiting overhead */
+const ship = buildShip({ envMap: metalEnv, SUN_DIR }); skyRig.add(ship.group);
+const clipper = buildClipper({ SUN_DIR }); skyRig.add(clipper.group);   // b21: Europa Clipper, high continuous overhead loop
+
+
+/* ---------------------------------------------------------- b4: teleport spots */
+// Glowing rings with labels. VR: point a controller at a ring (or its label) and pull the trigger. Desktop: number keys,
+// the buttons along the bottom, or click a ring. Always an instant jump behind a quick black fade (no gliding).
+const SPOTS = [
+  { key: '1', name: 'Cabin', to: [0, DECK_TOP, 4.5], yaw: 0, pitch: -0.08 },
+  { key: '2', name: 'Front railing', to: [0, DECK_TOP, -11.0], yaw: 0, pitch: -0.42 },
+  { key: '3', name: 'Rear railing', to: [0, DECK_TOP, 11.0], yaw: Math.PI, pitch: -0.35 },
+  { key: '4', name: 'Left edge', to: [-17.0, DECK_TOP, -11.0], yaw: -0.3, pitch: -0.45 },   // front-left corner, right above the trench's left wall
+  { key: '5', name: 'Right edge', to: [17.0, DECK_TOP, -11.0], yaw: 0.3, pitch: -0.45 },    // front-right corner, above the right wall
+  { key: '6', name: 'Glass floor', to: [1.3, DECK_TOP + 0.03, 0.6], yaw: 0, pitch: -1.15 },
+  // b7: nudged 1.7 m right (was x -2.6) so the line down to the Table ring clears the couch back; faces the front glass
+  // with Jupiter ~23 deg to the left (through the skylight) and the Table ring ~20 deg to the right
+  { key: '7', name: 'Living quarters', to: [-0.9, ROOF_TOP + 0.1, 4.4], yaw: 0.175, pitch: -0.05 },
+  { key: '8', name: 'Table', to: [-0.3, ROOF_TOP + 0.1, 1.0], yaw: 0.58, pitch: 0.12 },   // b7: open floor beside the round table, facing Jupiter
+  // b8: the open cabin-roof terrace in front of the quarters storey (z -7..-1, railed on its outer edges in b4)
+  { key: '9', name: 'Roof deck', to: [-3.0, ROOF_TOP, -4.6], yaw: 0.3, pitch: -0.22 },
+  { key: '0', name: 'Lander', to: landerAt(lander.rampFoot + 3), yaw: LANDER.ry, pitch: 0.2 },   // b12: foot of the ramp, looking up into the bay
+  // b18: standing pad in front of the framed crew portraits on the cabin back wall (yaw PI faces +z / the photos)
+  { key: 'C', name: 'Crew Wall', to: [2.42, DECK_TOP, 4.74], yaw: Math.PI, pitch: 0 },
+  // b21: camera-left of the crew portraits when facing them (left = +X, toward the Story board).
+  // Stands 1.94 m in front of the Story screen, yaw PI, for comfortable reading.
+  { key: 'S', name: 'Story Board', to: [5.0, DECK_TOP, 4.80], yaw: Math.PI, pitch: 0 },
+];
+// extra pads that lead to a spot from somewhere else: the foot of the outside stair goes up to the quarters
+const PADS = SPOTS.map((s, i) => ({ spot: i, at: s.to }));
+PADS.push({ spot: 6, at: [11.1, DECK_TOP, -6.4], label: 'Upstairs \u2191' });
+PADS.push({ spot: 0, at: [6.2, ROOF_TOP + 0.1, 1.2], label: 'Down to cabin \u2193' });
+PADS.push({ spot: 0, at: [3.2, ROOF_TOP, -3.4], label: 'Down to cabin \u2193' });   // b8: return ring on the roof deck
+PADS.push({ spot: 6, at: [-7.0, ROOF_TOP, -2.6], label: 'Quarters \u2192' });       // b8: back inside
+PADS.push({ spot: 9, at: [-14.5, DECK_TOP, -9.0], label: 'To lander \u2192' });      // b12: deck, front-left, near the Left edge spot
+PADS.push({ spot: 0, at: landerAt(lander.rampFoot + 3, 2.8), label: 'Back to base \u21a9' });   // b12: beside the Lander spot
+// b21: immediately camera-left of the Story Board pad (same z, +1.85 m in x) so you can point at it
+// from the Crew Wall or Story Board pad without standing up or turning around. Instant-fade to Front railing.
+PADS.push({ spot: 1, at: [6.85, DECK_TOP, 4.80], label: 'Outside \u00b7 Front' });
+const padGroup = new THREE.Group(); scene.add(padGroup);
+const padHits = [];
+const ringMat = new THREE.MeshBasicMaterial({ color: 0x8fdcff, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide });
+const discMat = new THREE.MeshBasicMaterial({ color: 0x2a6f9a, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+const ringGeo = new THREE.RingGeometry(0.55, 0.7, 40).rotateX(-Math.PI / 2), discGeo = new THREE.CircleGeometry(0.55, 32).rotateX(-Math.PI / 2);
+const hitGeo = new THREE.CylinderGeometry(0.9, 0.9, 0.3, 12), hitMat = new THREE.MeshBasicMaterial({ visible: false });
+function labelMesh(text) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 112; const g = c.getContext('2d');
+  g.beginPath(); g.roundRect(4, 4, 504, 104, 40); g.fillStyle = 'rgba(4,16,28,0.82)'; g.fill(); g.strokeStyle = '#8fdcff'; g.lineWidth = 4; g.stroke();
+  g.fillStyle = '#fff'; g.font = 'bold 52px Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 256, 58);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Mesh(new THREE.PlaneGeometry(1.25, 1.25 * 112 / 512), new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false, toneMapped: false }));
+}
+for (const p of PADS) {
+  const s = SPOTS[p.spot], g = new THREE.Group(); g.position.set(p.at[0], p.at[1] + 0.03, p.at[2]);
+  const ring = new THREE.Mesh(ringGeo, ringMat), disc = new THREE.Mesh(discGeo, discMat), hit = new THREE.Mesh(hitGeo, hitMat);
+  const lab = labelMesh(p.label || `${s.key} \u00b7 ${s.name}`); lab.position.y = 1.55;
+  ring.renderOrder = disc.renderOrder = 6; lab.renderOrder = 7; hit.position.y = 0.15;
+  lab.userData.pad = hit.userData.pad = p; g.add(ring, disc, hit, lab); padGroup.add(g);
+  p.group = g; p.label3d = lab; padHits.push(hit, lab);
+}
+// fade: a black shell on the camera (works in the headset as well as on desktop)
+const fadeMesh = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 8), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false }));
+fadeMesh.renderOrder = 999; fadeMesh.visible = false; camera.add(fadeMesh);
+let fadeAnim = null, currentSpot = 0;
+function fadeTo(target, ms, done) { fadeAnim = { from: fadeMesh.material.opacity, to: target, t0: performance.now(), ms, done }; fadeMesh.visible = true; }
+function tickFade(now) {
+  if (!fadeAnim) return; const k = Math.min(1, (now - fadeAnim.t0) / fadeAnim.ms);
+  fadeMesh.material.opacity = fadeAnim.from + (fadeAnim.to - fadeAnim.from) * k;
+  if (k >= 1) { const d = fadeAnim.done; fadeAnim = null; if (fadeMesh.material.opacity <= 0.001) fadeMesh.visible = false; if (d) d(); }
+}
+const _e = new THREE.Euler(), _hp = new THREE.Vector3();
+function placeAt(i) {
+  const s = SPOTS[i];
+  evaResetFlight(); evaFloorY = s.to[1];
+  if (renderer.xr.isPresenting) {                  // keep the real head pose; turn the play space so you face the spot's view
+    _e.setFromQuaternion(camera.quaternion, 'YXZ');
+    rig.rotation.set(0, s.yaw - _e.y, 0); rig.position.set(s.to[0], s.to[1], s.to[2]); rig.updateMatrixWorld(true);
+    camera.getWorldPosition(_hp); rig.position.x += s.to[0] - _hp.x; rig.position.z += s.to[2] - _hp.z; rig.updateMatrixWorld(true);
+  } else { rig.rotation.set(0, 0, 0); rig.position.set(s.to[0], s.to[1], s.to[2]); yaw = s.yaw; pitch = s.pitch; }
+  currentSpot = i; tpButtons.forEach((b, k) => b.classList.toggle('active', k === i));
+}
+function teleportTo(i) { if (fadeAnim) return; fadeTo(1, 110, () => { placeAt(i); fadeTo(0, 170); }); }
+// VR: controller rays hit the rings / labels
+const tpRay = new THREE.Raycaster(), _tq = new THREE.Matrix4();
+function padUnder(ctl) {
+  _tq.identity().extractRotation(ctl.matrixWorld);
+  tpRay.ray.origin.setFromMatrixPosition(ctl.matrixWorld); tpRay.ray.direction.set(0, 0, -1).applyMatrix4(_tq);
+  const h = tpRay.intersectObjects(padHits, false).find(o => o.object.parent.visible); return h ? { pad: h.object.userData.pad, dist: h.distance } : null;
+}
+const tpCtls = [renderer.xr.getController(0), renderer.xr.getController(1)];
+for (const c of tpCtls) c.addEventListener('select', () => {   // b12: the music panel and the music screens win over rings
+  if (panelZone(c)) return;
+  const ray = ctlRay(c), eh = eva.hit(ray), h = padUnder(c), s = screenUnder(c) || info.hit(ray);
+  if (s && (!h || s.distance <= h.dist) && (!eh || s.distance <= eh.distance)) return;
+  if (eh && (!h || eh.distance <= h.dist)) { eva.press(ray); return; }
+  if (h) teleportTo(h.pad.spot); });   // b9: the music panel wins when you point at it
+function tickPads(now) {
+  camera.getWorldPosition(_hp);
+  const pulse = 0.6 + 0.25 * Math.sin(now * 0.003); ringMat.opacity = pulse;
+  let hover = null;
+  if (renderer.xr.isPresenting) for (const c of tpCtls) {
+    const h = padUnder(c), line = c.children.find(o => o.isLine);
+    if (line) line.scale.z = h ? h.dist / 4 : 1;
+    if (h) hover = h.pad;
+  }
+  for (const p of PADS) {
+    const g = p.group, s = SPOTS[p.spot];
+    g.visible = Math.hypot(_hp.x - p.at[0], _hp.z - p.at[2]) > 1.6 || Math.abs(_hp.y - EYE - p.at[1]) > 2;   // hide the ring you are standing on
+    p.label3d.lookAt(_hp.x, g.position.y + 1.55, _hp.z);
+    const sc = p === hover ? 1.25 : 1; g.children[0].scale.setScalar(sc);
+  }
+}
+// desktop: number keys, buttons, click a ring
+window.addEventListener('keydown', e => { const i = SPOTS.findIndex(s => s.key === e.key || s.key.toLowerCase() === e.key.toLowerCase()); if (i >= 0) teleportTo(i); });
+const tpButtons = [];
+{
+  const ui = document.createElement('div'); ui.id = 'teleport-ui';
+  SPOTS.forEach((s, i) => { const b = document.createElement('button'); b.textContent = `${s.key} ${s.name}`; b.onclick = ev => { ev.stopPropagation(); teleportTo(i); }; ui.appendChild(b); tpButtons.push(b); });
+  document.body.appendChild(ui); tpButtons[0].classList.add('active');
+  let down = null; const mray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+  renderer.domElement.addEventListener('pointerup', e => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
+    ndc.set(e.clientX / window.innerWidth * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1); mray.setFromCamera(ndc, camera);
+    const ih = info.hit(mray), eh = eva.hit(mray), h0 = mray.intersectObjects(padHits, false).find(o => o.object.parent.visible);
+    if (ih && (!h0 || ih.distance <= h0.distance) && (!eh || ih.distance <= eh.distance)) { info.press(mray); return; }   // b17: click a wall screen = next page
+    const sh = mray.intersectObjects(musicScreens, false)[0];
+    const h = mray.intersectObjects(padHits, false).find(o => o.object.parent.visible);
+    if (sh && (!h || sh.distance <= h.distance) && (!eh || sh.distance <= eh.distance)) { openDeskPanel(); return; }   // b12: a music screen opens the panel, never a teleport
+    if (eh && (!h || eh.distance <= h.distance)) { eva.press(mray); return; }
+    if (h) teleportTo(h.object.userData.pad.spot);
+  });
+}
+
+/* ---------------------------------------------------------- HUD */
+document.querySelector('#hud .build').textContent = BUILD;
+document.querySelector('#hud .loc').textContent = `Ridge Base · ${SCENE_VER}`;
+
+/* ---------------------------------------------------------- helmet rim (suit presence, as on the surface) */
+{
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.055, 12, 48, Math.PI * 1.15),
+    new THREE.MeshStandardMaterial({ color: 0x1a222c, roughness: 0.7, metalness: 0.3 }));
+  rim.renderOrder = 100; rim.position.set(0, -0.12, -0.32); rim.rotation.set(0.15, 0, Math.PI * 0.925);
+  camera.add(rim);
+}
+
+/* ---------------------------------------------------------- in-headset label (scene name, version, build) */
+const vrLabel = (() => {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 150;
+  const g = c.getContext('2d');
+  g.beginPath(); g.roundRect(8, 8, 1008, 134, 28); g.fillStyle = 'rgba(4,14,24,0.78)'; g.fill(); g.strokeStyle = '#4f8fc0'; g.lineWidth = 3; g.stroke();
+  g.textAlign = 'center'; g.fillStyle = '#fff'; g.font = 'bold 54px sans-serif'; g.fillText('Europa \u2014 Ridge Base (test)', 512, 70);
+  g.fillStyle = '#9fd8ff'; g.font = '36px sans-serif'; g.fillText(`${SCENE_VER}  ·  ${BUILD}`, 512, 118);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5 * 150 / 1024),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+  m.renderOrder = 300; m.position.set(0, -0.27, -0.8); m.frustumCulled = false; m.visible = false; camera.add(m);
+  let pinned = true;
+  return { toggle() { pinned = !pinned; }, update() { m.visible = renderer.xr.isPresenting && pinned; } };
+})();
+
+/* ---------------------------------------------------------- XR: snap turn, A/X toggles the label */
+const SNAP_TURN_DEG = 30;
+function snapTurn(deg) {
+  const before = new THREE.Vector3(); camera.getWorldPosition(before);
+  rig.rotation.y += THREE.MathUtils.degToRad(deg); rig.updateMatrixWorld(true);
+  const after = new THREE.Vector3(); camera.getWorldPosition(after);
+  rig.position.x += before.x - after.x; rig.position.z += before.z - after.z; rig.updateMatrixWorld(true);
+}
+for (let i = 0; i < 2; i++) {
+  const ctl = renderer.xr.getController(i);
+  const ray = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -4)]),
+    new THREE.LineBasicMaterial({ color: 0x54c8ff, transparent: true, opacity: 0.6 }));
+  ctl.add(ray); rig.add(ctl);
+}
+const was = new Map(), stickArmed = new Map();
+function pollPads() {
+  const sess = renderer.xr.getSession && renderer.xr.getSession(); if (!sess) return;
+  evaInput.squeeze = false;
+  for (const src of sess.inputSources) {
+    const gp = src.gamepad; if (!gp) continue;
+    const prev = was.get(src) || [];
+    if (gp.buttons[4] && gp.buttons[4].pressed && !prev[4]) vrLabel.toggle();
+    if (gp.buttons[1] && gp.buttons[1].pressed) evaInput.squeeze = true;
+    const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);
+    const armed = stickArmed.get(src) !== false;
+    if (armed && Math.abs(sx) > 0.7) { snapTurn(sx > 0 ? -SNAP_TURN_DEG : SNAP_TURN_DEG); stickArmed.set(src, false); }
+    else if (!armed && Math.abs(sx) < 0.3) stickArmed.set(src, true);
+    was.set(src, gp.buttons.map(b => b.pressed));
+  }
+}
+renderer.xr.addEventListener('sessionstart', () => { rig.rotation.y = 0; rig.position.copy(BASE_SPAWN); currentSpot = 0; evaResetFlight(); evaFloorY = DECK_TOP; });   // start inside the cabin, facing along the trench
+
+/* ---------------------------------------------------------- desktop look + Enter VR */
+let yaw = 0, pitch = 0, roll = 0, dragging = false, px = 0, py = 0;
+const dom = renderer.domElement;
+dom.addEventListener('pointerdown', e => { dragging = true; px = e.clientX; py = e.clientY; });
+window.addEventListener('pointerup', () => { dragging = false; });
+window.addEventListener('pointermove', e => {
+  if (!dragging || renderer.xr.isPresenting) return;
+  yaw -= (e.clientX - px) * 0.0032; pitch -= (e.clientY - py) * 0.0028;
+  pitch = THREE.MathUtils.clamp(pitch, -1.2, 1.2); px = e.clientX; py = e.clientY;
+});
+{
+  const overlay = document.getElementById('overlay'), btn = document.getElementById('enter-vr');
+  overlay.addEventListener('click', e => { if (e.target !== btn) overlay.classList.add('hidden'); });
+  if ('xr' in navigator) {
+    navigator.xr.isSessionSupported('immersive-vr').then(ok => {
+      if (ok) {
+        btn.disabled = false; btn.textContent = 'Enter VR';
+        btn.onclick = () => overlay.classList.add('hidden');
+        document.body.appendChild(VRButton.createButton(renderer));
+        const real = document.querySelector('#VRButton'); real.style.display = 'none';
+        btn.addEventListener('click', () => real.click(), { once: true });
+      } else btn.textContent = 'VR not available — desktop mode';
+    }).catch(() => { btn.textContent = 'VR not available — desktop mode'; });
+  } else btn.textContent = 'VR not available — desktop mode';
+  renderer.xr.addEventListener('sessionstart', () => overlay.classList.add('hidden'));
+  renderer.xr.addEventListener('sessionend', () => overlay.classList.remove('hidden'));
+}
+
+/* ---------------------------------------------------------- b16-radio-local: built-in Mars tracks plus local files from this device
+ * Two Moons Rising and Rings of Gold stay the default built-in tracks. Volume, mute and the rig-sound toggle
+ * are unchanged. Picked files/folders (and desktop drag-and-drop) are loaded with URL.createObjectURL — nothing
+ * is uploaded. A file picker cannot open inside an immersive WebXR session, so Add local audio in VR leaves VR
+ * first; pick files, then Enter VR again. Prev/Next (and auto-advance when a track ends) walk the full list. */
+const TRACKS = [{ id: 'moons', name: 'Two Moons Rising', src: './assets/two-moons-rising-atmospheric.mp3' },
+                { id: 'gold', name: 'Rings of Gold', src: './assets/rings-of-gold-atmospheric.mp3' }];
+const BUILT_IN = TRACKS.length;
+const VOL_KEY = 'ridge-base-b12-music';
+const AUDIO_EXT = /\.(mp3|m4a|m4b|aac|wav|wave|ogg|oga|opus|flac|webm|weba|mp4|aif|aiff|caf)$/i;
+let vol = 0.5, muted = false, track = 0, musicStarted = false, pendingAdd = false, skipGuard = 0;
+try { const o = JSON.parse(localStorage.getItem(VOL_KEY) || 'null'); if (o) { vol = Math.min(1, Math.max(0, +o.vol || 0)); muted = !!o.muted; track = Math.max(0, TRACKS.findIndex(t => t.id === o.track)); } } catch (e) { /* ignore */ }
+const music = new Audio(TRACKS[track].src); music.loop = false; music.preload = 'auto';
+let lastBuiltIn = TRACKS[track] ? TRACKS[track].id : 'moons';
+function startMusic() { musicStarted = true; if (music.paused) music.play().catch(() => {}); }
+const musicUI = { slider: null, mute: null, pct: null, title: null };
+function saveMusic() {
+  if (TRACKS[track] && !TRACKS[track].local) lastBuiltIn = TRACKS[track].id;
+  try { localStorage.setItem(VOL_KEY, JSON.stringify({ track: lastBuiltIn, vol, muted })); } catch (e) { /* ignore */ }
+}
+function applyVol() {
+  music.volume = muted ? 0 : vol; saveMusic();
+  if (musicUI.slider) musicUI.slider.value = String(Math.round(vol * 100));
+  if (musicUI.pct) musicUI.pct.textContent = muted ? 'off' : `${Math.round(vol * 100)}%`;
+  if (musicUI.mute) musicUI.mute.textContent = muted || vol === 0 ? '\u{1F507}' : '\u{1F50A}';
+  if (musicUI.title) musicUI.title.textContent = `\u266B ${TRACKS[track].name}`;
+  drawPanel(); drawScreens(); syncDeskPanel();
+}
+function setVol(v) { vol = Math.min(1, Math.max(0, Math.round(v * 10) / 10)); if (vol > 0) muted = false; startMusic(); applyVol(); }
+function toggleMute() { muted = !muted; if (!muted && vol === 0) vol = 0.3; startMusic(); applyVol(); }
+function setTrack(i, force = false) {
+  if (i < 0 || i >= TRACKS.length) return;
+  if (i === track && !force) { startMusic(); applyVol(); return; }
+  track = i; music.loop = false; music.src = TRACKS[i].src; music.currentTime = 0;
+  if (musicStarted) music.play().catch(() => {}); else startMusic();
+  applyVol();
+}
+function nextTrack(fromEnd = false) {
+  if (!TRACKS.length) return;
+  setTrack((track + 1) % TRACKS.length, fromEnd || ((track + 1) % TRACKS.length) === track);
+}
+function prevTrack() {
+  if (!TRACKS.length) return;
+  setTrack((track - 1 + TRACKS.length) % TRACKS.length);
+}
+function toggleRigSound() { rigSound.start(); rigSound.toggleMute(); }
+function isAudioFile(f) {
+  const type = f && f.type != null ? String(f.type) : '';
+  const name = (f && f.name) || '';
+  return type.startsWith('audio/') || type.startsWith('video/') || AUDIO_EXT.test(name) || !type;
+}
+function localIdx() { return TRACKS.map((t, i) => t.local ? i : -1).filter((i) => i >= 0); }
+function setHint(msg) {
+  const el = document.getElementById('pick-hint');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.classList.toggle('show', !!msg);
+  clearTimeout(setHint.t);
+  if (msg) setHint.t = setTimeout(() => { el.classList.remove('show'); }, 7000);
+}
+function updateQueueCount() {
+  const n = localIdx().length;
+  const el = document.getElementById('queueCount');
+  if (el) el.textContent = n ? `${n} local track${n === 1 ? '' : 's'} loaded` : 'No local tracks loaded yet';
+}
+function addFiles(list) {
+  const raw = [...(list || [])];
+  const files = raw.filter(isAudioFile);
+  if (!files.length) { setHint('No audio files in that selection.'); return 0; }
+  const first = TRACKS.length;
+  for (const f of files) {
+    TRACKS.push({
+      id: 'local-' + TRACKS.length + '-' + Date.now(),
+      name: String(f.name || 'Track').replace(/\.[^.]+$/, ''),
+      src: URL.createObjectURL(f),
+      local: true,
+    });
+  }
+  setHint(`Added ${files.length} song${files.length === 1 ? '' : 's'} from this device. Nothing was uploaded. Choosing again adds more.`);
+  rebuildDeskTracks();
+  setTrack(first);
+  return files.length;
+}
+function clearLocal() {
+  const wasLocal = !!(TRACKS[track] && TRACKS[track].local);
+  for (const t of TRACKS) if (t.local && typeof t.src === 'string' && t.src.startsWith('blob:')) URL.revokeObjectURL(t.src);
+  TRACKS.splice(BUILT_IN);
+  rebuildDeskTracks();
+  if (wasLocal || track >= TRACKS.length) {
+    const i = TRACKS.findIndex((t) => t.id === lastBuiltIn);
+    setTrack(i >= 0 ? i : 0, true);
+  } else {
+    drawPanel(); drawScreens(); syncDeskPanel();
+  }
+  setHint('Cleared local files. Two Moons Rising and Rings of Gold are still here.');
+}
+const fileInput = document.getElementById('musicInput');
+const folderInput = document.getElementById('folderInput');
+if (fileInput) fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+if (folderInput) folderInput.addEventListener('change', () => { addFiles(folderInput.files); folderInput.value = ''; });
+function showPickBar(show) {
+  const bar = document.getElementById('mine-pick');
+  if (bar) bar.classList.toggle('show', !!show);
+}
+function requestPicker() {
+  const s = renderer.xr.getSession && renderer.xr.getSession();
+  if (s) {
+    pendingAdd = true;
+    s.end();
+    return;
+  }
+  showPickBar(false);
+  openDeskPanel();
+  if (fileInput) fileInput.click();
+}
+{ const b = document.getElementById('pickFilesBtn'); if (b) b.addEventListener('click', (e) => { e.stopPropagation(); showPickBar(false); if (fileInput) fileInput.click(); }); }
+{ const b = document.getElementById('pickFolderBtn'); if (b) b.addEventListener('click', (e) => { e.stopPropagation(); showPickBar(false); if (folderInput) folderInput.click(); }); }
+music.addEventListener('ended', () => { skipGuard = 0; nextTrack(true); });
+music.addEventListener('error', () => {
+  if (TRACKS[track] && TRACKS[track].local && skipGuard++ < TRACKS.length) nextTrack(true);
+  else if (TRACKS[track] && TRACKS[track].local) setHint(`Couldn\u2019t play \u201c${TRACKS[track].name}\u201d in this browser.`);
+});
+window.addEventListener('keydown', (e) => {
+  if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.key === 'n' || e.key === 'N') nextTrack();
+  else if (e.key === 'p' || e.key === 'P') prevTrack();
+});
+
+/* Desktop drag-and-drop onto the entry overlay, the music panel, or the window (Quest has no drop target in VR). */
+function isFileDrag(e) { return e.dataTransfer && [...e.dataTransfer.types].includes('Files'); }
+async function walkEntry(entry, out) {
+  if (!entry) return;
+  if (entry.isFile) { out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const all = [];
+    for (;;) {
+      const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      if (!batch.length) break;
+      all.push(...batch);
+    }
+    for (const child of all) await walkEntry(child, out);
+  }
+}
+async function filesFromDataTransfer(dt) {
+  const items = [...(dt.items || [])];
+  const out = [];
+  let walked = false;
+  for (const it of items) {
+    const entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+    if (entry) { walked = true; await walkEntry(entry, out); }
+  }
+  if (walked && out.length) return out;
+  return [...(dt.files || [])];
+}
+function enableDrop(el) {
+  if (!el) return;
+  el.addEventListener('dragover', (e) => { if (isFileDrag(e)) { e.preventDefault(); el.classList.add('drop-hover'); } });
+  el.addEventListener('dragleave', (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove('drop-hover'); });
+  el.addEventListener('drop', async (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); el.classList.remove('drop-hover');
+    addFiles(await filesFromDataTransfer(e.dataTransfer));
+  });
+}
+window.addEventListener('dragover', (e) => { if (isFileDrag(e)) e.preventDefault(); });
+window.addEventListener('drop', async (e) => {
+  if (!isFileDrag(e)) return;
+  if (e.defaultPrevented) return;
+  e.preventDefault();
+  addFiles(await filesFromDataTransfer(e.dataTransfer));
+});
+
+// VR panel (1024 x 512 canvas): current name, then Prev / Two Moons / Rings of Gold / Next / Add; bottom = mute, -, bar, +, rig
+const PW = 0.56, PH = 0.28, pc = document.createElement('canvas'); pc.width = 1024; pc.height = 512;
+const pTex = new THREE.CanvasTexture(pc); pTex.colorSpace = THREE.SRGBColorSpace;
+const musicPanel = new THREE.Mesh(new THREE.PlaneGeometry(PW, PH),
+  new THREE.MeshBasicMaterial({ map: pTex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+musicPanel.renderOrder = 1000; musicPanel.position.set(0, 0.95, -0.7); musicPanel.rotation.x = -0.55; musicPanel.visible = false;
+rig.add(musicPanel);
+function zoneAt(u, v) {   // v: 0 bottom .. 1 top
+  if (v > 0.74) return null;
+  if (v > 0.5) return ['prev', 'track0', 'track1', 'next', 'add'][Math.min(4, Math.floor(u * 5))];
+  if (u < 0.15) return 'mute'; if (u < 0.29) return 'down'; if (u > 0.82) return 'rig'; if (u > 0.68) return 'up'; return 'bar';
+}
+let hoverZone = null;
+function drawPanel() {
+  const g = pc.getContext('2d'), W = pc.width, H = pc.height; g.clearRect(0, 0, W, H);
+  g.fillStyle = 'rgba(6,16,28,0.86)'; g.strokeStyle = 'rgba(243,210,122,0.7)'; g.lineWidth = 5;
+  g.beginPath(); g.roundRect(4, 4, W - 8, H - 8, 46); g.fill(); g.stroke();
+  const fit = (s, w) => { let t = String(s); while (t.length > 3 && g.measureText(t).width > w) t = t.slice(0, -2); return t === String(s) ? t : t + '\u2026'; };
+  const cur = TRACKS[track] || TRACKS[0];
+  g.fillStyle = '#fff6dc'; g.font = '600 36px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(fit((cur.local ? '' : '\u266B ') + cur.name, 900), W / 2, 70);
+  g.fillStyle = '#9fc8e8'; g.font = '22px sans-serif';
+  g.fillText(cur.local ? `local file  \u00b7  ${track + 1} / ${TRACKS.length}` : `${track + 1} / ${TRACKS.length}`, W / 2, 108);
+  const cells = [
+    { id: 'prev', title: '\u25C0 Prev', sub: '' },
+    { id: 'track0', title: TRACKS[0].name, sub: '', on: track === 0 },
+    { id: 'track1', title: TRACKS[1].name, sub: '', on: track === 1 },
+    { id: 'next', title: 'Next \u25B6', sub: '' },
+    { id: 'add', title: '+ Add', sub: 'leave VR' },
+  ];
+  cells.forEach((c, i) => {
+    const x = 16 + i * 200, on = !!c.on, hv = hoverZone === c.id;
+    g.fillStyle = on ? 'rgba(150,112,30,0.9)' : hv ? 'rgba(80,160,230,0.55)' : 'rgba(30,70,110,0.7)';
+    g.beginPath(); g.roundRect(x, 132, 190, 118, 28); g.fill();
+    if (on) { g.strokeStyle = '#f3d27a'; g.lineWidth = 5; g.stroke(); }
+    g.fillStyle = on ? '#fff6dc' : '#cfe9ff'; g.font = '600 24px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const n = c.title.split(' ');
+    if (!c.sub && n.length > 2) {
+      g.fillText(fit((on ? '\u266B ' : '') + n.slice(0, 2).join(' '), 174), x + 95, 172);
+      g.fillText(fit(n.slice(2).join(' '), 174), x + 95, 204);
+    } else {
+      g.fillText(fit((on && !c.sub ? '\u266B ' : '') + c.title, 174), x + 95, c.sub ? 170 : 191);
+      if (c.sub) { g.font = '20px sans-serif'; g.fillStyle = '#9fc8e8'; g.fillText(fit(c.sub, 174), x + 95, 206); }
+    }
+  });
+  const cy = 375;
+  const btn = (cx, id, draw, lit) => {
+    g.fillStyle = hoverZone === id ? 'rgba(80,160,230,0.55)' : lit ? 'rgba(150,112,30,0.9)' : 'rgba(30,70,110,0.7)';
+    g.beginPath(); g.arc(cx, cy, 70, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#cfe9ff'; g.fillStyle = '#cfe9ff'; g.lineWidth = 13; g.lineCap = 'round'; draw(cx);
+  };
+  btn(W * 0.075, 'mute', cx => {
+    g.beginPath(); g.moveTo(cx - 38, cy - 18); g.lineTo(cx - 16, cy - 18); g.lineTo(cx + 8, cy - 40); g.lineTo(cx + 8, cy + 40);
+    g.lineTo(cx - 16, cy + 18); g.lineTo(cx - 38, cy + 18); g.closePath(); g.fill(); g.lineWidth = 9;
+    if (muted || vol === 0) { g.beginPath(); g.moveTo(cx + 20, cy - 16); g.lineTo(cx + 44, cy + 16); g.moveTo(cx + 44, cy - 16); g.lineTo(cx + 20, cy + 16); g.stroke(); }
+    else { g.beginPath(); g.arc(cx + 10, cy, 26, -0.8, 0.8); g.stroke(); }
+  });
+  btn(W * 0.22, 'down', cx => { g.beginPath(); g.moveTo(cx - 30, cy); g.lineTo(cx + 30, cy); g.stroke(); });
+  btn(W * 0.75, 'up', cx => { g.beginPath(); g.moveTo(cx - 30, cy); g.lineTo(cx + 30, cy); g.moveTo(cx, cy - 30); g.lineTo(cx, cy + 30); g.stroke(); });
+  btn(W * 0.91, 'rig', cx => { g.font = '600 34px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('RIG', cx, cy - 14); g.font = '600 28px sans-serif'; g.fillText(rigSound.muted ? 'off' : 'on', cx, cy + 22); }, !rigSound.muted);
+  const x0 = W * 0.31, x1 = W * 0.66;
+  g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.roundRect(x0, cy + 4, x1 - x0, 24, 12); g.fill();
+  g.fillStyle = muted ? 'rgba(160,170,180,0.6)' : '#f3d27a'; g.beginPath(); g.roundRect(x0, cy + 4, Math.max(24, (x1 - x0) * vol), 24, 12); g.fill();
+  g.fillStyle = '#e8f4ff'; g.font = '600 40px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  g.fillText(`Volume ${muted ? 'off' : Math.round(vol * 100) + '%'}`, (x0 + x1) / 2, cy - 22);
+  pTex.needsUpdate = true;
+}
+// wall screens (cabin downstairs, quarters upstairs): show the current track; click / trigger opens the panel
+const screenCanvas = document.createElement('canvas'); screenCanvas.width = 640; screenCanvas.height = 360;
+const screenTex = new THREE.CanvasTexture(screenCanvas); screenTex.colorSpace = THREE.SRGBColorSpace;
+const musicScreens = [];
+{
+  const faceMat = new THREE.MeshBasicMaterial({ map: screenTex, toneMapped: false });
+  const bezelMat = new THREE.MeshStandardMaterial({ color: 0x15191f, roughness: 0.4, metalness: 0.6 });
+  const make = (x, y, z, ry, w = 1.5) => {
+    const h = w * 9 / 16, g = new THREE.Group();
+    const bez = new THREE.Mesh(new THREE.BoxGeometry(w + 0.1, h + 0.1, 0.06), bezelMat); bez.position.z = -0.035; g.add(bez);
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), faceMat); face.position.z = 0.0; g.add(face);
+    g.position.set(x, y, z); g.rotation.y = ry; scene.add(g); face.userData.musicScreen = true; musicScreens.push(face);
+  };
+  make(-CAB_W / 2 + 0.26, DECK_TOP + 1.85, 3.0, Math.PI / 2, 2.4);          // downstairs: cabin left wall, facing in (inset so it clears the b14 window glass)
+  make(-1.0, ROOF_TOP + 1.6, 7 - 0.14, Math.PI, 1.7);                      // upstairs: quarters back wall, between the tablets and the bunks
+}
+// b17: wall screens from b13-screens — science on the right wall, story + upgrades on the back wall.
+// Inset 0.26 m from the wall centre so the bezel sits inside the b14 inset window glass (no z-fight).
+const info = buildInfoScreens({
+  scene,
+  maxAniso: Math.min(renderer.capabilities.getMaxAnisotropy(), 16),
+  list: [
+    { pages: PAGES.SCIENCE, x: CAB_W / 2 - 0.26, y: DECK_TOP + 1.85, z: 3.0, ry: -Math.PI / 2, w: 2.4 },
+    { pages: PAGES.STORY, crisp: true, x: 5.0, y: DECK_TOP + 1.85, z: CAB_L / 2 - 0.26, ry: Math.PI, w: 2.4 },
+  ],
+});
+// b18: three matte-framed crew portraits on the cabin back wall, just left of the Story screen,
+// inset 0.26 m like the screens so they sit inside the glass (no glass-fit overlap).
+{
+  const loader = new THREE.TextureLoader();
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x1a1c20, roughness: 0.7, metalness: 0.2 });
+  const plateMat = new THREE.MeshStandardMaterial({ color: 0x2a2e34, roughness: 0.7, metalness: 0.2 });
+  const SIZE = 0.62, MOLDING = 0.035, DEPTH = 0.03;
+  const z = CAB_L / 2 - 0.26, yPhoto = DECK_TOP + 1.70;
+  const crew = [
+    { file: 'crew-leyra.jpg', name: 'Leyra', x: 1.65 },
+    { file: 'crew-kai.jpg',   name: 'Kai',   x: 2.42 },
+    { file: 'crew-mars.jpg',  name: 'Mars',  x: 3.19 },
+  ];
+  const plateTex = (name) => {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 64; const g = c.getContext('2d');
+    g.fillStyle = '#2a2e34'; g.fillRect(0, 0, 256, 64);
+    g.fillStyle = '#e8dcc8'; g.font = '600 36px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(name, 128, 34);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; return tex;
+  };
+  for (const cr of crew) {
+    const grp = new THREE.Group();
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(SIZE + MOLDING * 2, SIZE + MOLDING * 2, DEPTH), frameMat);
+    frame.position.z = -DEPTH / 2; grp.add(frame);
+    const tex = loader.load(`./assets/${cr.file}`); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    const photo = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, metalness: 0.0 }));
+    photo.position.z = 0.002; grp.add(photo);
+    const plateW = 0.28, plateH = 0.055, plateD = 0.02;
+    const plateY = -(SIZE / 2 + MOLDING + 0.045);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(plateW, plateH, plateD), plateMat);
+    plate.position.set(0, plateY, -plateD / 2); grp.add(plate);
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(plateW - 0.01, plateH - 0.01),
+      new THREE.MeshBasicMaterial({ map: plateTex(cr.name), toneMapped: false }));
+    face.position.set(0, plateY, 0.002); grp.add(face);
+    grp.position.set(cr.x, yPhoto, z); grp.rotation.y = Math.PI; scene.add(grp);
+  }
+}
+
+const eva = buildEvaRack({ scene, envMap: metalEnv, deckTop: DECK_TOP, cabL: CAB_L });
+
+/* ---------------------------------------------------------- EVA pack thrusters (Europa g = 1.315 m/s²)
+ * Hold Space / the Thruster button / VR squeeze for a gentle upward hop once you have a suit
+ * on and you are outside. Release and you float back down with a cushioned landing.
+ * Height is capped at 15 m. No camera tilt, no horizontal boost. */
+const EVA_G = 1.315, EVA_THRUST = 3.6, EVA_V_UP = 2.2, EVA_V_DOWN = 2.2, EVA_CEIL = 15, EVA_CUSHION = 1.6;
+let evaVy = 0, evaFloorY = DECK_TOP, evaHold = 0;
+const evaInput = { key: false, btn: false, squeeze: false };
+function evaSuited() { return !!eva.worn; }
+function evaOutside() {
+  const { x, y, z } = rig.position;
+  const inCabin = Math.abs(x) < CAB_W / 2 - 0.2 && Math.abs(z) < CAB_L / 2 - 0.2 && y >= DECK_TOP - 0.25 && y < DECK_TOP + CAB_H + 0.25;
+  const inQ = x > -8.1 && x < 8.1 && z > -1.1 && z < 7.1 && y >= ROOF_TOP - 0.25 && y < ROOF_TOP + 3.2;
+  return !inCabin && !inQ;
+}
+function evaWantThrust() { return evaInput.key || evaInput.btn || evaInput.squeeze; }
+
+const evaHudEl = document.createElement('div');
+evaHudEl.id = 'eva-hud';
+evaHudEl.style.cssText = 'position:fixed;left:12px;bottom:16px;z-index:6;font-size:13px;padding:8px 14px;border-radius:999px;background:rgba(10,28,46,.8);color:#cfe9ff;border:1px solid #2f5b85;pointer-events:none;display:none';
+document.body.appendChild(evaHudEl);
+const thrustBtn = document.createElement('button');
+thrustBtn.id = 'thrust-btn';
+thrustBtn.textContent = 'Thruster (Space)';
+thrustBtn.style.cssText = 'position:fixed;right:12px;bottom:166px;z-index:6;font-size:13px;padding:8px 14px;border-radius:999px;cursor:pointer;background:rgba(10,28,46,.8);color:#cfe9ff;border:1px solid #2f5b85';
+thrustBtn.onpointerdown = ev => { ev.preventDefault(); ev.stopPropagation(); evaInput.btn = true; };
+const clearBtn = ev => { ev.preventDefault(); ev.stopPropagation(); evaInput.btn = false; };
+thrustBtn.onpointerup = thrustBtn.onpointerleave = thrustBtn.onpointercancel = clearBtn;
+document.body.appendChild(thrustBtn);
+
+const evaVrHud = (() => {
+  const c = document.createElement('canvas'); c.width = 768; c.height = 128;
+  const g = c.getContext('2d');
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.42 * 128 / 768),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+  m.renderOrder = 301; m.position.set(0, -0.36, -0.8); m.frustumCulled = false; m.visible = false; camera.add(m);
+  return {
+    draw(text, thrusting) {
+      g.clearRect(0, 0, 768, 128);
+      g.beginPath(); g.roundRect(8, 8, 752, 112, 24);
+      g.fillStyle = thrusting ? 'rgba(40,28,10,0.82)' : 'rgba(4,14,24,0.78)'; g.fill();
+      g.strokeStyle = thrusting ? '#f3d27a' : '#4f8fc0'; g.lineWidth = 3; g.stroke();
+      g.fillStyle = '#fff'; g.font = '700 48px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(text, 384, 64);
+      tex.needsUpdate = true;
+    },
+    set visible(v) { m.visible = v; },
+  };
+})();
+
+// subtle first-person visor + two soft thrust glows (no camera tilt)
+const evaVisor = new THREE.Mesh(new THREE.SphereGeometry(0.28, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.45),
+  new THREE.MeshBasicMaterial({ color: 0xc8a44a, transparent: true, opacity: 0.0, depthTest: false, depthWrite: false, side: THREE.BackSide, toneMapped: false }));
+evaVisor.rotation.x = Math.PI / 2; evaVisor.position.set(0, 0.02, -0.18); evaVisor.renderOrder = 99; camera.add(evaVisor);
+const evaFlames = [];
+for (const s of [-1, 1]) {
+  const f = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffc070, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+  f.position.set(s * 0.08, -0.28, 0.12); f.rotation.x = Math.PI; f.renderOrder = 101; f.visible = false; camera.add(f); evaFlames.push(f);
+}
+
+let evaHiss = null;
+function evaEnsureHiss() {
+  if (evaHiss) return evaHiss;
+  const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+  const ac = new AC();
+  const buf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+  const data = buf.getChannelData(0); for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.5;
+  const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 880; bp.Q.value = 0.65;
+  const gain = ac.createGain(); gain.gain.value = 0;
+  src.connect(bp); bp.connect(gain); gain.connect(ac.destination); src.start();
+  evaHiss = { ac, gain }; return evaHiss;
+}
+function evaResetFlight() {
+  evaVy = 0; evaHold = 0; evaInput.key = evaInput.btn = evaInput.squeeze = false;
+}
+
+function tickEva(dt) {
+  const suited = evaSuited(), outside = evaOutside();
+  const can = suited && outside;
+  const want = can && evaWantThrust();
+  // smooth the hold so acceleration never steps
+  const tgt = want ? 1 : 0;
+  evaHold += (tgt - evaHold) * Math.min(1, dt * 6);
+
+  if (can) {
+    const alt = rig.position.y - evaFloorY;
+    if (evaHold > 0.01) {
+      const headroom = EVA_CEIL - alt;
+      const taper = headroom < 2.5 ? Math.max(0, headroom / 2.5) : 1;
+      evaVy += EVA_THRUST * evaHold * taper * dt;
+    }
+    evaVy -= EVA_G * dt;
+    evaVy = Math.max(-EVA_V_DOWN, Math.min(EVA_V_UP, evaVy));
+    if (alt < EVA_CUSHION && evaVy < 0) {
+      const t = 1 - alt / EVA_CUSHION;
+      evaVy += (-evaVy) * t * t * 6 * dt;          // cushioned settle, no thud
+    }
+    rig.position.y += evaVy * dt;
+    if (rig.position.y > evaFloorY + EVA_CEIL) { rig.position.y = evaFloorY + EVA_CEIL; if (evaVy > 0) evaVy = 0; }
+    if (rig.position.y <= evaFloorY) { rig.position.y = evaFloorY; evaVy = 0; }
+  } else if (evaVy !== 0 || rig.position.y !== evaFloorY) {
+    // if you hang the suit mid-air, keep the soft descent
+    evaHold = 0;
+    evaVy -= EVA_G * dt;
+    evaVy = Math.max(-EVA_V_DOWN, evaVy);
+    rig.position.y += evaVy * dt;
+    if (rig.position.y <= evaFloorY) { rig.position.y = evaFloorY; evaVy = 0; }
+  }
+
+  const altNow = Math.max(0, rig.position.y - evaFloorY);
+  const thrusting = evaHold > 0.05 && can;
+  const visor = suited ? (thrusting ? 0.10 : 0.06) : 0;
+  evaVisor.material.opacity += (visor - evaVisor.material.opacity) * Math.min(1, dt * 8);
+  evaVisor.visible = evaVisor.material.opacity > 0.01;
+  const flame = thrusting ? 0.55 : 0;
+  for (const f of evaFlames) { f.visible = flame > 0.02; f.material.opacity = flame; }
+
+  const hiss = evaEnsureHiss();
+  if (hiss) {
+    if (hiss.ac.state === 'suspended') hiss.ac.resume().catch(() => {});
+    const g = thrusting ? 0.045 : 0;
+    hiss.gain.gain.setTargetAtTime(g, hiss.ac.currentTime, 0.05);
+  }
+
+  const label = suited
+    ? (can ? `EVA · ${eva.worn}   ${altNow.toFixed(1)} m${thrusting ? '   ↑' : ''}` : `EVA · ${eva.worn}   (go outside to thrust)`)
+    : '';
+  evaHudEl.style.display = suited ? 'block' : 'none';
+  if (suited) evaHudEl.textContent = label;
+  evaVrHud.visible = suited && renderer.xr.isPresenting;
+  if (suited) evaVrHud.draw(label, thrusting);
+  thrustBtn.style.borderColor = thrusting ? '#f3d27a' : '#2f5b85';
+  thrustBtn.style.color = can ? '#fff6dc' : '#8fa8c0';
+}
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); evaInput.key = true; }
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); evaInput.key = false; }
+});
+
+function drawScreens() {
+  const g = screenCanvas.getContext('2d'), W = 640, H = 360;
+  const gr = g.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#1a1206'); gr.addColorStop(1, '#06121f'); g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  g.strokeStyle = '#f3d27a'; g.lineWidth = 6; g.strokeRect(10, 10, W - 20, H - 20);
+  g.fillStyle = '#f3d27a'; g.font = '600 46px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('\u266B  MUSIC', W / 2, 70);
+  g.fillStyle = '#fff6dc'; g.font = '600 44px sans-serif';
+  { let n = TRACKS[track].name; while (n.length > 3 && g.measureText(n).width > 580) n = n.slice(0, -2); g.fillText(n === TRACKS[track].name ? n : n + '\u2026', W / 2, 160); }
+  if (TRACKS[track].local) { g.fillStyle = '#f3d27a'; g.font = '26px sans-serif'; g.fillText('local file', W / 2, 115); }
+  g.fillStyle = '#9fc8e8'; g.font = '34px sans-serif'; g.fillText(muted ? 'muted' : `volume ${Math.round(vol * 100)}%`, W / 2, 220);
+  g.fillStyle = 'rgba(111,183,239,0.25)'; g.beginPath(); g.roundRect(120, 262, 400, 64, 32); g.fill();
+  g.fillStyle = '#cfe9ff'; g.font = '600 30px sans-serif'; g.fillText('tap to open', W / 2, 295);
+  screenTex.needsUpdate = true;
+}
+const mRay = new THREE.Raycaster(), _mq = new THREE.Matrix4();
+function ctlRay(ctl) { _mq.identity().extractRotation(ctl.matrixWorld); mRay.ray.origin.setFromMatrixPosition(ctl.matrixWorld); mRay.ray.direction.set(0, 0, -1).applyMatrix4(_mq); return mRay; }
+function panelZone(ctl) {
+  if (!musicPanel.visible) return null;
+  const h = ctlRay(ctl).intersectObject(musicPanel, false)[0]; if (!h) return null;
+  return zoneAt(h.uv.x, h.uv.y);
+}
+function screenUnder(ctl) { const h = ctlRay(ctl).intersectObjects(musicScreens, false)[0]; return h && h.distance < 25 ? h : null; }
+function openPanelVR(show = true) {   // place it low in front of where you are looking
+  if (show) {
+    const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ'), hy = e.y;
+    musicPanel.position.set(camera.position.x - Math.sin(hy) * 0.7, camera.position.y - 0.62, camera.position.z - Math.cos(hy) * 0.7);
+    musicPanel.rotation.set(-0.55, hy, 0, 'YXZ');
+  }
+  musicPanel.visible = show;
+}
+const mCtls = [renderer.xr.getController(0), renderer.xr.getController(1)];
+for (const c of mCtls) c.addEventListener('select', () => {
+  startMusic();
+  const z = panelZone(c);
+  if (z) {
+    if (z === 'mute') toggleMute(); else if (z === 'down') setVol(vol - 0.1); else if (z === 'up') setVol(vol + 0.1);
+    else if (z === 'track0') setTrack(0); else if (z === 'track1') setTrack(1);
+    else if (z === 'prev') prevTrack(); else if (z === 'next') nextTrack();
+    else if (z === 'add') requestPicker();
+    else if (z === 'rig') toggleRigSound();
+    return;
+  }
+  if (info.press(ctlRay(c))) return;   // b17: turn the wall-screen page
+  if (screenUnder(c)) openPanelVR(true);
+});
+const mPrev = new Map();
+function tickMusicVR() {
+  let hz = null; for (const c of mCtls) hz = hz || panelZone(c);
+  if (hz !== hoverZone) { hoverZone = hz; drawPanel(); }
+  const sess = renderer.xr.getSession && renderer.xr.getSession(); if (!sess) return;
+  for (const src of sess.inputSources) {
+    const gp = src.gamepad; if (!gp) continue;
+    const p = gp.buttons[5] && gp.buttons[5].pressed;
+    if (p && !mPrev.get(src)) openPanelVR(!musicPanel.visible);   // B / Y opens / closes the music panel
+    mPrev.set(src, p);
+  }
+}
+renderer.xr.addEventListener('sessionstart', () => { startMusic(); showPickBar(false); });
+renderer.xr.addEventListener('sessionend', () => {
+  musicPanel.visible = false;
+  if (pendingAdd) {
+    pendingAdd = false;
+    showPickBar(true);
+    setHint('The headset cannot open a file picker inside VR. Choose files or a folder, then Enter VR again.');
+  }
+});
+// desktop: compact slider bottom-right, and the full panel that the wall screens open
+const deskPanel = document.createElement('div'); deskPanel.id = 'music-panel';
+deskPanel.innerHTML = `<h3>\u266B Music</h3>
+  <div class="row" id="built-row">${TRACKS.slice(0, BUILT_IN).map((t, i) => `<button type="button" data-t="${i}">${t.name}</button>`).join('')}</div>
+  <div class="row mine-list" style="flex-wrap:wrap"></div>
+  <div class="row">
+    <button type="button" data-a="pick">\u{1F4C2} Add local audio\u2026</button>
+    <button type="button" data-a="folder">\u{1F4C1} Add a folder\u2026</button>
+  </div>
+  <div class="row">
+    <button type="button" data-a="prev">\u25C0 Previous</button>
+    <button type="button" data-a="next">Next \u25B6</button>
+    <button type="button" data-a="clear">Clear local files</button>
+  </div>
+  <p class="queue-count" id="queueCount">No local tracks loaded yet</p>
+  <p class="hint">Files stay on this device and are not uploaded. On Quest, add them before Enter VR, or after you leave VR \u2014 the picker cannot open while you are inside the headset.</p>
+  <div class="row"><button type="button" data-a="down">\u2212</button><span class="vol"></span><button type="button" data-a="up">+</button></div>
+  <div class="row"><button type="button" data-a="mute"></button><button type="button" data-a="rig"></button></div>
+  <div class="row"><button type="button" data-a="close">Close</button></div>`;
+document.body.appendChild(deskPanel);
+for (const ev of ['pointerdown', 'pointerup', 'click']) deskPanel.addEventListener(ev, e => e.stopPropagation());
+deskPanel.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.t) setTrack(+b.dataset.t);
+  const a = b.dataset.a;
+  if (a === 'down') setVol(vol - 0.1); else if (a === 'up') setVol(vol + 0.1); else if (a === 'mute') toggleMute();
+  else if (a === 'rig') { toggleRigSound(); syncDeskPanel(); drawPanel(); } else if (a === 'close') deskPanel.classList.remove('open');
+  else if (a === 'pick') requestPicker();
+  else if (a === 'folder') { if (renderer.xr.isPresenting) requestPicker(); else if (folderInput) folderInput.click(); }
+  else if (a === 'prev') prevTrack();
+  else if (a === 'next') nextTrack();
+  else if (a === 'clear') clearLocal();
+});
+function rebuildDeskTracks() {
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const row = deskPanel.querySelector('.mine-list');
+  if (row) row.innerHTML = localIdx().map((i) => `<button type="button" data-t="${i}" style="flex:0 1 auto">${esc(TRACKS[i].name)}</button>`).join('');
+  updateQueueCount();
+  syncDeskPanel();
+}
+function syncDeskPanel() {
+  deskPanel.querySelectorAll('[data-t]').forEach(b => b.classList.toggle('on', +b.dataset.t === track));
+  const volEl = deskPanel.querySelector('.vol'); if (volEl) volEl.textContent = muted ? 'muted' : `Volume ${Math.round(vol * 100)}%`;
+  const m = deskPanel.querySelector('[data-a="mute"]'); if (m) m.textContent = muted ? '\u{1F507} Unmute music' : '\u{1F50A} Mute music';
+  const r = deskPanel.querySelector('[data-a="rig"]');
+  if (r) { r.textContent = rigSound.muted ? 'Rig sound: off' : 'Rig sound: on'; r.classList.toggle('on', !rigSound.muted); }
+  updateQueueCount();
+}
+function openDeskPanel() { startMusic(); syncDeskPanel(); deskPanel.classList.add('open'); }
+{
+  const box = document.createElement('div'); box.id = 'music-ui';
+  box.innerHTML = '<span class="t" title="open the music panel"></span><button type="button" class="add">Add local audio</button><button type="button" class="m"></button><input type="range" min="0" max="100" step="5"><span class="p"></span>';
+  document.body.appendChild(box);
+  musicUI.slider = box.querySelector('input'); musicUI.mute = box.querySelector('.m'); musicUI.pct = box.querySelector('.p'); musicUI.title = box.querySelector('.t');
+  musicUI.slider.addEventListener('input', () => { vol = Number(musicUI.slider.value) / 100; muted = false; startMusic(); applyVol(); });
+  musicUI.mute.addEventListener('click', toggleMute);
+  musicUI.title.addEventListener('click', openDeskPanel);
+  box.querySelector('.add').addEventListener('click', (e) => { e.stopPropagation(); requestPicker(); });
+  document.getElementById('enter-vr').addEventListener('click', startMusic);
+  document.getElementById('overlay').addEventListener('click', startMusic);
+  renderer.domElement.addEventListener('pointerdown', startMusic);
+}
+enableDrop(document.getElementById('overlay'));
+enableDrop(deskPanel);
+applyVol();
+window.__ridgeMusic = {
+  addFiles, clearLocal, nextTrack, prevTrack, setTrack, fileInput, folderInput,
+  get tracks() { return TRACKS.map((t) => ({ id: t.id, name: t.name, local: !!t.local })); },
+  get track() { return track; },
+  simulatePick: (files) => addFiles(files),
+  isAudioFile,
+};
+
+/* ---------------------------------------------------------- fps meter */
+const fpsEl = document.querySelector('#hud .fps');
+let frames = 0, lastT = performance.now(), ema = 60;
+function tickFps(now) {
+  frames++;
+  if (now - lastT >= 500) {
+    const fps = frames * 1000 / (now - lastT); ema = ema * 0.6 + fps * 0.4;
+    fpsEl.textContent = `${ema.toFixed(0)} fps`;
+    fpsEl.style.color = ema >= 85 ? '#7dffa8' : ema >= 60 ? '#ffd47d' : '#ff8d7d';
+    frames = 0; lastT = now;
+  }
+}
+
+/* ---------------------------------------------------------- main loop */
+window.__enceladus = { build: BUILD, look: (y, p = 0, r = 0) => { yaw = y; pitch = p; roll = r; },
+  head: (x = 0, y = 0, z = 0) => camera.position.set(x, PLAYER_HEIGHT + y, z), at: (x, y, z) => rig.position.set(x, y, z),
+  lander, ship, drill, setTrack, nextTrack, prevTrack, openDeskPanel, musicScreens, get track() { return track; },
+  addFiles, clearLocal,
+  tp: { go: i => placeAt(i), spots: SPOTS }, sound: rigSound, snow, music, setVol, toggleMute, musicPanel, get vol() { return vol; }, get muted() { return muted; },
+  rigE7: { set: z => { rigZ = z; }, roll: d => e7.roll(d), pause: (b = true) => { rigPaused = b; }, get z() { return rigZ; }, tris: e7.tris, model: e7 },
+  dbg: { ring, THREE, scene, camera, renderer, ground, groundMat, front, sun, rim: camera.children[0] } };
+const _skyPos = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  const now = performance.now(); tickFps(now);
+  if (!renderer.xr.isPresenting) { camera.rotation.set(0, 0, 0); camera.rotateY(yaw); camera.rotateX(pitch); if (roll) camera.rotateZ(roll); }
+  sun.position.copy(rig.position).addScaledVector(SUN_DIR, 160); sun.target.position.copy(rig.position); sun.target.updateMatrixWorld();
+  camera.getWorldPosition(_skyPos); skyRig.position.copy(_skyPos);
+  front.position.set(_skyPos.x, _skyPos.y - EYE, _skyPos.z); ring.position.copy(front.position);   // panel centred on the eye (horizon stays at eye level, no parallax)
+  if (renderer.xr.isPresenting) { pollPads(); tickMusicVR(); }
+  { const t = now * 0.001, dt = Math.min(0.1, t - (tickRig.last || t)); tickRig.last = t; tickRig(t, dt); ship.tick(dt); clipper.tick(dt); drill.tick(t); info.tick(dt); tickEva(dt); tickPads(now); tickFade(now);
+    if (!tickRig.scr || t - tickRig.scr > 1) { tickRig.scr = t; quarters.updateLive(rigZ); } }
+  vrLabel.update();
+  renderer.render(scene, camera);
+});
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
